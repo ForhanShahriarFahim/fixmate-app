@@ -1,0 +1,99 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:cloud_functions/cloud_functions.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:firebase_storage/firebase_storage.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:fixmate/core/constants/app_constants.dart';
+import 'package:fixmate/core/domain/models.dart';
+import 'package:fixmate/core/data/repositories/auth_repository.dart';
+import 'package:fixmate/core/data/repositories/marketplace_repository.dart';
+import 'package:fixmate/core/data/repositories/notification_service.dart';
+
+final firebaseAuthProvider = Provider<FirebaseAuth>(
+  (ref) => FirebaseAuth.instance,
+);
+final firestoreProvider = Provider<FirebaseFirestore>(
+  (ref) => FirebaseFirestore.instance,
+);
+final firebaseStorageProvider = Provider<FirebaseStorage>(
+  (ref) => FirebaseStorage.instance,
+);
+final cloudFunctionsProvider = Provider<FirebaseFunctions>(
+  (ref) => FirebaseFunctions.instanceFor(region: AppConstants.functionsRegion),
+);
+final firebaseMessagingProvider = Provider<FirebaseMessaging>(
+  (ref) => FirebaseMessaging.instance,
+);
+
+final authRepositoryProvider = Provider<AuthRepository>(
+  (ref) => AuthRepository(
+    ref.watch(firebaseAuthProvider),
+    ref.watch(firestoreProvider),
+  ),
+);
+
+final marketplaceRepositoryProvider = Provider<MarketplaceRepository>(
+  (ref) => MarketplaceRepository(
+    ref.watch(firestoreProvider),
+    ref.watch(cloudFunctionsProvider),
+    ref.watch(firebaseStorageProvider),
+  ),
+);
+
+final notificationServiceProvider = Provider<NotificationService>(
+  (ref) => NotificationService(
+    ref.watch(firestoreProvider),
+    ref.watch(firebaseMessagingProvider),
+  ),
+);
+
+final authStateProvider = StreamProvider<User?>((ref) {
+  return ref.watch(firebaseAuthProvider).authStateChanges();
+});
+
+final currentUserProfileProvider = StreamProvider<AppUserProfile?>((ref) {
+  final user = ref.watch(authStateProvider).value;
+  if (user == null) return Stream<AppUserProfile?>.value(null);
+  return ref
+      .watch(firestoreProvider)
+      .collection('users')
+      .doc(user.uid)
+      .snapshots()
+      .map(
+        (snapshot) =>
+            snapshot.exists ? AppUserProfile.fromDocument(snapshot) : null,
+      );
+});
+
+final providerProfileProvider = StreamProvider.family<ProviderProfile?, String>(
+  (ref, uid) {
+    return ref
+        .watch(firestoreProvider)
+        .collection('provider_profiles')
+        .doc(uid)
+        .snapshots()
+        .map(
+          (snapshot) =>
+              snapshot.exists ? ProviderProfile.fromDocument(snapshot) : null,
+        );
+  },
+);
+
+final categoriesProvider = StreamProvider<List<ServiceCategory>>((ref) {
+  return ref.watch(marketplaceRepositoryProvider).watchCategories();
+});
+
+final serviceProvider = StreamProvider.family<ServiceListing?, String>((
+  ref,
+  serviceId,
+) {
+  return ref.watch(marketplaceRepositoryProvider).watchService(serviceId);
+});
+
+final bookingProvider = StreamProvider.family<Booking?, String>((
+  ref,
+  bookingId,
+) {
+  return ref.watch(marketplaceRepositoryProvider).watchBooking(bookingId);
+});

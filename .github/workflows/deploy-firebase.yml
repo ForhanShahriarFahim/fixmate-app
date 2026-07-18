@@ -1,0 +1,42 @@
+name: Deploy Firebase beta
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "functions/**"
+      - "firestore.rules"
+      - "firestore.indexes.json"
+      - "storage.rules"
+      - "firebase.json"
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: firebase-beta
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: beta
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: functions/package-lock.json
+      - run: npm ci
+        working-directory: functions
+      - run: npm test
+        working-directory: functions
+      - id: auth
+        uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ vars.GCP_PROJECT_ID }}
+          workload_identity_provider: ${{ vars.WIF_PROVIDER }}
+          service_account: ${{ vars.DEPLOY_SERVICE_ACCOUNT }}
+      - run: ./functions/node_modules/.bin/firebase deploy --project "${{ vars.GCP_PROJECT_ID }}" --only functions,firestore:rules,firestore:indexes,storage

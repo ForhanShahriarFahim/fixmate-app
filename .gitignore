@@ -1,0 +1,39 @@
+# Flutter / Dart
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+.pub-cache/
+.pub/
+build/
+coverage/
+
+# Android / IDE
+android/.gradle/
+android/local.properties
+android/key.properties
+*.jks
+*.keystore
+android/app/src/main/java/io/flutter/plugins/GeneratedPluginRegistrant.java
+*.iml
+.idea/
+.vscode/
+
+# Firebase
+.firebase/
+firebase-debug.log
+firestore-debug.log
+ui-debug.log
+functions/lib/
+functions/node_modules/
+
+# Credentials and local configuration
+.env
+.env.*
+!.env.example
+*service-account*.json
+gha-creds-*.json
+
+# OS files
+.DS_Store
+Thumbs.db
