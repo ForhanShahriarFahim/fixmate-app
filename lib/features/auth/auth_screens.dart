@@ -1,5 +1,3 @@
-import 'dart:async';
-
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -49,12 +47,6 @@ class SessionGateScreen extends ConsumerWidget {
             if (value.status != AccountStatus.active) {
               return AccountRestrictedScreen(profile: value);
             }
-            unawaited(
-              ref
-                  .read(notificationServiceProvider)
-                  .initializeForUser(value.id)
-                  .catchError((_) {}),
-            );
             final path = value.role == UserRole.customer
                 ? '/customer'
                 : '/provider';
@@ -112,13 +104,6 @@ class AccountRestrictedScreen extends ConsumerWidget {
                 const SizedBox(height: 22),
                 FilledButton.icon(
                   onPressed: () async {
-                    try {
-                      await ref
-                          .read(notificationServiceProvider)
-                          .clearForUser();
-                    } catch (_) {
-                      // Authentication sign-out must still proceed offline.
-                    }
                     await ref.read(authRepositoryProvider).signOut();
                   },
                   icon: const Icon(Icons.logout),

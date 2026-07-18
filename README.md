@@ -1,112 +1,126 @@
-# FixMate
+# FixMate — Firebase Spark Edition
 
-FixMate is a Flutter/Firebase Android marketplace for booking approved home-service providers across Bangladesh. The repository is structured for direct GitHub import into [FlutLab](https://flutlab.io/).
+FixMate is a Flutter Android marketplace for booking approved home-service
+providers across Bangladesh. This edition is intentionally designed for the
+no-cost Firebase **Spark** plan and direct GitHub import into
+[FlutLab](https://flutlab.io/).
 
-## Implemented beta
+## Included beta functionality
 
-- Customer/provider email accounts with verification, immutable roles, adult and Terms acceptance.
-- Provider application, Firebase Console approval, nationwide district coverage, and up to ten service areas.
-- Public categories and service listings with fixed BDT prices and optional cover images.
-- Transactional booking lifecycle with three Dhaka time windows and provider conflict prevention.
-- Private contact release after acceptance, calls, text-only booking chat, blocks, and reports.
-- In-app and FCM notifications, cash completion confirmation, disputes, reviews, and rating aggregation.
-- Firestore/Storage Rules, indexes, callable Functions, deletion cleanup, emulator tests, CI/CD, legal pages, and Play beta checklist.
+- Customer/provider email accounts, verification, immutable roles, adult and
+  Terms acceptance.
+- Provider applications with Firebase Console approval and up to ten service
+  areas.
+- Text-only service listings with fixed BDT prices and built-in category art.
+- Firestore-transaction booking lifecycle with deterministic provider slot
+  locks.
+- Contact privacy, calls after acceptance, real-time text chat, blocks, and
+  reports.
+- Cash completion, disputes, one review per booking, and dynamically calculated
+  reputation statistics.
+- Booking/message activity inside the app, App Check, Crashlytics, Firestore
+  Rules, indexes, emulator tests, legal pages, and a Play beta checklist.
+
+## Spark plan limitations
+
+No billing account or Blaze upgrade is required. This edition deliberately
+does not use Cloud Functions or Cloud Storage, so it does not include uploaded
+avatars/service covers, Android push delivery, scheduled jobs, or trigger-based
+aggregates. Account deletion performs client-side cleanup and retains only a
+pseudonymous deletion marker and moderation identifiers for manual security
+handling.
+
+Firestore Security Rules are the authoritative backend validator. Every
+booking status change includes a matching append-only event, and accepting a
+booking atomically creates a unique `provider_slots` lock.
 
 ## Repository layout
 
 ```text
-android/              Android package com.fixmatebd.app
-assets/               Bangladesh division/district data
-lib/                  Flutter application
-functions/            TypeScript Firebase backend (Node 22)
-test/                 Flutter tests
-docs/                 GitHub Pages legal site
-firestore.rules        Client data-access policy
-storage.rules          Image access and size/type policy
+android/                 Android package com.fixmatebd.app
+assets/                  Bangladesh division/district data
+lib/                     Flutter application
+functions/               Local seed and Firestore Rules test tooling only
+test/                    Flutter tests
+docs/                    GitHub Pages legal site
+firestore.rules          Spark marketplace authorization policy
+firestore.indexes.json   Required Firestore indexes
 ```
 
-## 1. Create and configure Firebase
+## 1. Create a no-cost Firebase project
 
-1. Create `fixmatebd-app-2026` (fallback `fixmatebd-app-2026-bd`) and upgrade it to Blaze. Add budget alerts.
-2. Create Firestore in `asia-south1` Mumbai and create the default Storage bucket in the same region.
+1. Create `fixmatebd-app-2026` (fallback `fixmatebd-app-2026-bd`).
+2. Keep the project on the **Spark** plan. Do not attach a billing account.
 3. Enable Email/Password in Authentication.
-4. Register Android package `com.fixmatebd.app` and download `google-services.json`.
-5. In FlutLab, import this repository, select **Connect to Firebase → Android**, and upload `google-services.json`. FlutLab will add the required Android Google Services configuration.
-6. Replace the placeholders in `lib/core/firebase/firebase_options.dart` with the generated FlutterFire/FlutLab values.
-7. Enable Cloud Messaging, Crashlytics, and App Check. Use App Check monitoring during internal testing; enforce Play Integrity only after genuine-device traffic is verified.
+4. Create the one free Firestore database in `asia-south1` Mumbai using
+   Production mode.
+5. Register Android package `com.fixmatebd.app` and download
+   `google-services.json`.
+6. Enable Crashlytics and register App Check. Keep App Check enforcement off
+   until genuine debug/internal-test traffic has been verified.
 
-The app deliberately shows a setup screen instead of crashing while Firebase values are placeholders. Never commit a service-account key. After creating the beta project, commit the generated Firebase **client** configuration because FlutLab and Android require it; authorization is enforced by Rules and Functions.
+Do not enable Cloud Functions or Cloud Storage. The `storageBucket` value in a
+generated Firebase options file is harmless client metadata; the app does not
+call Firebase Storage.
 
-## 2. Deploy backend and seed categories
+## 2. Connect Firebase in FlutLab
 
-Install Node.js 22 and Firebase CLI, then:
+1. Import the GitHub repository root.
+2. Select **Connect to Firebase → Android** and upload
+   `google-services.json`.
+3. Copy FlutLab's generated `lib/firebase_options.dart` over
+   `lib/core/firebase/firebase_options.dart`, then remove the extra generated
+   file.
+4. Confirm no `REPLACE_WITH` placeholders remain.
+5. Run **Pub get** using Flutter 3.44.6 / Dart 3.12 or a newer compatible
+   builder.
+
+FixMate already initializes Firebase, App Check, and Crashlytics in `main.dart`.
+Do not replace it with a tutorial initialization snippet.
+
+## 3. Deploy only Firestore configuration
+
+Install Firebase CLI, then run from the repository root:
+
+```console
+firebase login
+firebase use --add
+firebase deploy --only firestore:rules,firestore:indexes
+```
+
+This deploy does not require Blaze. A manual GitHub Actions workflow is also
+included, but only use it after configuring its Workload Identity variables.
+
+## 4. Seed the six categories
+
+The `functions/` directory is local tooling and is not a deployable Functions
+backend:
 
 ```console
 cd functions
 npm ci
 npm test
-cd ..
-firebase login
-firebase use --add
-firebase deploy --only functions,firestore:rules,firestore:indexes,storage
 gcloud auth application-default login
-cd functions
 npm run seed -- --project fixmatebd-app-2026
 ```
 
-The seed script uses Google Application Default Credentials and creates electrical, plumbing, cleaning, AC repair, appliance repair, and painting categories. Firebase CLI login is used for deployment; the one-time local seed additionally needs `gcloud auth application-default login`.
+The seed creates electrical, plumbing, cleaning, AC repair, appliance repair,
+and painting categories. Change the project ID when using the fallback.
 
-All callable and Firestore triggers are Gen 2 in `asia-south1`. Firebase Authentication deletion events are still Gen 1 only, so `cleanupDeletedAuthUser` is the documented exception in `asia-east2`.
+## 5. Approve a provider
 
-## 3. Approve a provider
-
-1. Register a provider in the app and verify the email.
+1. Register a provider and verify the email.
 2. Complete the provider application.
 3. Open Firestore → `provider_profiles/{uid}`.
-4. Verify the profile and phone, then change `approvalStatus` from `pending` to `approved`.
-5. To suspend any account, update `users/{uid}.status` to `suspended` in Firebase Console.
+4. Verify the supplied details and change `approvalStatus` from `pending` to
+   `approved`.
+5. To suspend an account, update `users/{uid}.status` to `suspended` through
+   Firebase Console.
 
-See [ADMIN_RUNBOOK.md](ADMIN_RUNBOOK.md) for reports, disputes, deletion requests, and moderation.
-
-## 4. Import and build in FlutLab
-
-1. Push this repository to GitHub as `fixmate-app`.
-2. In FlutLab choose **Import from GitHub** and select the repository root.
-3. Select Flutter **3.44.6 / Dart 3.12**. If FlutLab labels builders differently, choose its newest builder with Dart 3.12 or later and do not upgrade package versions.
-4. Connect Firebase as described above and run **Pub get**.
-5. Run the analyzer, launch the Android preview/device build, then build an APK or AAB.
-6. Commit the generated `pubspec.lock`, final `firebase_options.dart`, Android Firebase changes, and `google-services.json` back to GitHub.
-
-The repository and lockfile were verified with Flutter 3.44.6 / Dart 3.12.2. This workstation has no Android SDK, so the final APK/AAB build remains a required FlutLab check.
-
-## GitHub Actions
-
-- `ci.yml` analyzes/tests Flutter, compiles/tests Functions, and runs Firestore Rules tests in the emulator.
-- `deploy-firebase.yml` deploys on `main` using Workload Identity Federation.
-- `pages.yml` publishes the legal site.
-
-Configure the GitHub `beta` environment variables:
-
-- `GCP_PROJECT_ID`
-- `WIF_PROVIDER`
-- `DEPLOY_SERVICE_ACCOUNT`
-
-Restrict the Workload Identity provider to the exact repository and `refs/heads/main`. Grant the deployment service account only the Firebase/Cloud Functions roles required by `firebase deploy`.
-
-## Legal URLs
-
-The application constants currently use `https://fixmatebd.github.io/fixmate-app/`. If the GitHub owner differs, update `lib/core/constants/app_constants.dart` before release. Reserve `fixmatebd.support@gmail.com` before publishing.
+See [ADMIN_RUNBOOK.md](ADMIN_RUNBOOK.md) for moderation, disputes, and deletion
+handling.
 
 ## Verification
-
-Completed locally during implementation:
-
-- `flutter analyze`: no issues.
-- `flutter test`: all tests passed.
-- TypeScript compile/state tests: passed.
-- Firestore Rules emulator tests: all tests passed.
-
-`npm audit --omit=dev` currently reports the upstream `uuid` moderate advisory through the latest tested `firebase-admin` dependency chain. npm offers only a forced downgrade to `firebase-admin` 10.3.0, so that breaking and outdated change was not applied. Recheck the pinned Admin SDK before beta promotion.
 
 ```console
 cd functions
@@ -121,7 +135,15 @@ flutter pub get
 dart format --output=none --set-exit-if-changed lib test
 flutter analyze
 flutter test
-flutter build appbundle
+flutter build apk
 ```
 
-For Play upload, add `android/key.properties` and a private upload keystore through a secure local/FlutLab mechanism. Those files are intentionally ignored; without them, local release builds use debug signing only for test installation.
+For Play upload, add `android/key.properties` and a private upload keystore
+through a secure local/FlutLab mechanism. Those files are intentionally ignored.
+
+## Legal URLs
+
+Application constants currently use `https://fixmatebd.github.io/fixmate-app/`.
+If the GitHub Pages owner differs, update
+`lib/core/constants/app_constants.dart` before release. Reserve
+`fixmatebd.support@gmail.com` before publishing.

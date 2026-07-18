@@ -14,18 +14,7 @@
       "fields": [
         { "fieldPath": "status", "order": "ASCENDING" },
         { "fieldPath": "categoryId", "order": "ASCENDING" },
-        { "fieldPath": "districtCode", "order": "ASCENDING" },
-        { "fieldPath": "providerRating", "order": "DESCENDING" }
-      ]
-    },
-    {
-      "collectionGroup": "services",
-      "queryScope": "COLLECTION",
-      "fields": [
-        { "fieldPath": "status", "order": "ASCENDING" },
-        { "fieldPath": "districtCode", "order": "ASCENDING" },
-        { "fieldPath": "areaKeys", "arrayConfig": "CONTAINS" },
-        { "fieldPath": "priceBdt", "order": "ASCENDING" }
+        { "fieldPath": "districtCode", "order": "ASCENDING" }
       ]
     },
     {
@@ -66,16 +55,6 @@
       "fields": [
         { "fieldPath": "providerId", "order": "ASCENDING" },
         { "fieldPath": "createdAt", "order": "DESCENDING" }
-      ]
-    },
-    {
-      "collectionGroup": "bookings",
-      "queryScope": "COLLECTION",
-      "fields": [
-        { "fieldPath": "providerId", "order": "ASCENDING" },
-        { "fieldPath": "scheduleDateKey", "order": "ASCENDING" },
-        { "fieldPath": "timeWindow", "order": "ASCENDING" },
-        { "fieldPath": "status", "order": "ASCENDING" }
       ]
     },
     {
