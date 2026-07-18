@@ -1,14 +1,7 @@
 name: Deploy Firebase beta
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - "functions/**"
-      - "firestore.rules"
-      - "firestore.indexes.json"
-      - "storage.rules"
-      - "firebase.json"
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -39,4 +32,4 @@ jobs:
           project_id: ${{ vars.GCP_PROJECT_ID }}
           workload_identity_provider: ${{ vars.WIF_PROVIDER }}
           service_account: ${{ vars.DEPLOY_SERVICE_ACCOUNT }}
-      - run: ./functions/node_modules/.bin/firebase deploy --project "${{ vars.GCP_PROJECT_ID }}" --only functions,firestore:rules,firestore:indexes,storage
+      - run: ./functions/node_modules/.bin/firebase deploy --project "${{ vars.GCP_PROJECT_ID }}" --only firestore:rules,firestore:indexes

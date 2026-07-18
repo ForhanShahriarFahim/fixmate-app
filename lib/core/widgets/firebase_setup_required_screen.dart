@@ -36,8 +36,8 @@ class FirebaseSetupRequiredScreen extends StatelessWidget {
                   child: Padding(
                     padding: EdgeInsets.all(18),
                     child: Text(
-                      'Required Firebase products: Authentication, Firestore, Storage, Functions, '
-                      'Cloud Messaging, App Check, and Crashlytics.',
+                      'Required Firebase products: Authentication, Firestore, App Check, and Crashlytics. '
+                      'Keep the project on the no-cost Spark plan.',
                     ),
                   ),
                 ),

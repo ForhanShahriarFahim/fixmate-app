@@ -373,16 +373,8 @@ class ServiceCard extends StatelessWidget {
               decoration: BoxDecoration(
                 color: Theme.of(context).colorScheme.primaryContainer,
                 borderRadius: BorderRadius.circular(16),
-                image: service.coverImageUrl == null
-                    ? null
-                    : DecorationImage(
-                        image: NetworkImage(service.coverImageUrl!),
-                        fit: BoxFit.cover,
-                      ),
               ),
-              child: service.coverImageUrl == null
-                  ? const Icon(Icons.handyman, size: 34)
-                  : null,
+              child: const Icon(Icons.handyman, size: 34),
             ),
             const SizedBox(width: 14),
             Expanded(
@@ -403,14 +395,9 @@ class ServiceCard extends StatelessWidget {
                   const SizedBox(height: 6),
                   Row(
                     children: [
-                      const Icon(
-                        Icons.star_rounded,
-                        color: Colors.amber,
-                        size: 18,
-                      ),
-                      Text(
-                        '${service.providerRating.toStringAsFixed(1)} (${service.reviewCount})',
-                      ),
+                      const Icon(Icons.verified_outlined, size: 18),
+                      const SizedBox(width: 4),
+                      const Text('Approved provider'),
                       const Spacer(),
                       Text(
                         '৳${NumberFormat.decimalPattern().format(service.priceBdt)}',
@@ -459,16 +446,8 @@ class ServiceDetailScreen extends ConsumerWidget {
                 decoration: BoxDecoration(
                   borderRadius: BorderRadius.circular(24),
                   color: Theme.of(context).colorScheme.primaryContainer,
-                  image: service.coverImageUrl == null
-                      ? null
-                      : DecorationImage(
-                          image: NetworkImage(service.coverImageUrl!),
-                          fit: BoxFit.cover,
-                        ),
                 ),
-                child: service.coverImageUrl == null
-                    ? const Icon(Icons.home_repair_service, size: 72)
-                    : null,
+                child: const Icon(Icons.home_repair_service, size: 72),
               ),
               const SizedBox(height: 20),
               Text(
@@ -486,7 +465,7 @@ class ServiceDetailScreen extends ConsumerWidget {
                     data: (value) => Text(
                       value == null
                           ? 'Approved provider'
-                          : '${value.experienceYears} years experience • ${value.ratingAverage.toStringAsFixed(1)} ★',
+                          : '${value.experienceYears} years experience • approved provider',
                     ),
                     loading: () => const Text('Loading provider…'),
                     error: (_, _) => const Text('Approved provider'),
@@ -543,24 +522,40 @@ class ServiceDetailScreen extends ConsumerWidget {
                       child: Text('No reviews yet.'),
                     );
                   }
+                  final reviews = snapshot.data!;
+                  final average =
+                      reviews.fold<int>(
+                        0,
+                        (total, review) => total + review.rating,
+                      ) /
+                      reviews.length;
                   return Column(
-                    children: snapshot.data!
-                        .take(5)
-                        .map(
-                          (review) => ListTile(
-                            contentPadding: EdgeInsets.zero,
-                            leading: CircleAvatar(
-                              child: Text(review.rating.toString()),
-                            ),
-                            title: Text(review.customerName),
-                            subtitle: Text(
-                              review.comment.isEmpty
-                                  ? 'Rated ${review.rating} out of 5'
-                                  : review.comment,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 10),
+                        child: Text(
+                          '${average.toStringAsFixed(1)} ★ from ${reviews.length} reviews',
+                          style: Theme.of(context).textTheme.titleMedium,
+                        ),
+                      ),
+                      ...reviews
+                          .take(5)
+                          .map(
+                            (review) => ListTile(
+                              contentPadding: EdgeInsets.zero,
+                              leading: CircleAvatar(
+                                child: Text(review.rating.toString()),
+                              ),
+                              title: Text(review.customerName),
+                              subtitle: Text(
+                                review.comment.isEmpty
+                                    ? 'Rated ${review.rating} out of 5'
+                                    : review.comment,
+                              ),
                             ),
                           ),
-                        )
-                        .toList(),
+                    ],
                   );
                 },
               ),
@@ -628,7 +623,7 @@ class _CreateBookingScreenState extends ConsumerState<CreateBookingScreen> {
     try {
       final result = await ref
           .read(marketplaceRepositoryProvider)
-          .call('createBooking', <String, dynamic>{
+          .runMutation('createBooking', <String, dynamic>{
             'serviceId': service.id,
             'dateKey': DateFormat('yyyy-MM-dd').format(_date!),
             'timeWindow': _window.name,

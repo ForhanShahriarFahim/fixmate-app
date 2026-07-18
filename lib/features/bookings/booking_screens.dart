@@ -76,7 +76,7 @@ class BookingDetailScreen extends ConsumerWidget {
     Map<String, dynamic> data,
   ) async {
     try {
-      await ref.read(marketplaceRepositoryProvider).call(function, data);
+      await ref.read(marketplaceRepositoryProvider).runMutation(function, data);
       if (context.mounted) showMessage(context, 'Booking updated.');
     } catch (error) {
       if (context.mounted) {
@@ -592,10 +592,11 @@ class _ContactCard extends ConsumerWidget {
     String phone,
   ) async {
     try {
-      final response = await ref.read(marketplaceRepositoryProvider).call(
-        'checkCommunication',
-        <String, dynamic>{'bookingId': bookingId},
-      );
+      final response = await ref
+          .read(marketplaceRepositoryProvider)
+          .runMutation('checkCommunication', <String, dynamic>{
+            'bookingId': bookingId,
+          });
       if (response['status'] != 'allowed') {
         if (context.mounted) {
           showMessage(
@@ -706,7 +707,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     if (text.isEmpty || text.length > AppConstants.maxMessageLength) return;
     setState(() => _sending = true);
     try {
-      await ref.read(marketplaceRepositoryProvider).call(
+      await ref.read(marketplaceRepositoryProvider).runMutation(
         'sendMessage',
         <String, dynamic>{'bookingId': widget.bookingId, 'text': text},
       );
@@ -740,7 +741,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     try {
       await ref
           .read(marketplaceRepositoryProvider)
-          .call('submitReport', <String, dynamic>{
+          .runMutation('submitReport', <String, dynamic>{
             'bookingId': widget.bookingId,
             'targetType': ReportTarget.message.name,
             'targetId': message.id,

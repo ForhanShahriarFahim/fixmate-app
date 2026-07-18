@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
-import 'package:image_picker/image_picker.dart';
 import 'package:fixmate/core/constants/app_constants.dart';
 import 'package:fixmate/core/data/firebase_providers.dart';
 import 'package:fixmate/core/domain/models.dart';
@@ -90,7 +89,6 @@ class _ProviderOnboardingScreenState
             divisionCode: _divisionCode!,
             districtCode: _districtCode!,
             serviceAreas: _areas,
-            avatarUrl: widget.existing?.avatarUrl,
           );
       if (mounted) context.go('/provider');
     } catch (error) {
@@ -313,105 +311,122 @@ class ProviderDashboardScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final user = ref.watch(currentUserProfileProvider).value;
     if (user == null) return const LoadingView();
-    final profile = ref.watch(providerProfileProvider(user.id)).value;
     return Scaffold(
       appBar: AppBar(
         title: Text('Hello, ${user.displayName.split(' ').first}'),
       ),
-      body: StreamBuilder<List<Booking>>(
+      body: StreamBuilder<List<ServiceReview>>(
         stream: ref
             .read(marketplaceRepositoryProvider)
-            .watchBookings(uid: user.id, role: UserRole.provider),
-        builder: (context, snapshot) {
-          final bookings = snapshot.data ?? const <Booking>[];
-          final pending = bookings
-              .where((item) => item.status == BookingStatus.pending)
-              .length;
-          final active = bookings
-              .where(
-                (item) => <BookingStatus>{
-                  BookingStatus.accepted,
-                  BookingStatus.inProgress,
-                  BookingStatus.completionRequested,
-                }.contains(item.status),
-              )
-              .length;
-          return ListView(
-            padding: const EdgeInsets.all(18),
-            children: [
-              Card(
-                color: Theme.of(context).colorScheme.primaryContainer,
-                child: Padding(
-                  padding: const EdgeInsets.all(20),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text('Your reputation'),
-                      const SizedBox(height: 8),
-                      Text(
-                        '${profile?.ratingAverage.toStringAsFixed(1) ?? '0.0'} ★',
-                        style: Theme.of(context).textTheme.headlineMedium,
+            .watchProviderReviews(user.id),
+        builder: (context, reviewSnapshot) {
+          final reviews = reviewSnapshot.data ?? const <ServiceReview>[];
+          final average = reviews.isEmpty
+              ? 0.0
+              : reviews.fold<int>(0, (total, review) => total + review.rating) /
+                    reviews.length;
+          return StreamBuilder<List<Booking>>(
+            stream: ref
+                .read(marketplaceRepositoryProvider)
+                .watchBookings(uid: user.id, role: UserRole.provider),
+            builder: (context, bookingSnapshot) {
+              final bookings = bookingSnapshot.data ?? const <Booking>[];
+              final pending = bookings
+                  .where((item) => item.status == BookingStatus.pending)
+                  .length;
+              final active = bookings
+                  .where(
+                    (item) => <BookingStatus>{
+                      BookingStatus.accepted,
+                      BookingStatus.inProgress,
+                      BookingStatus.completionRequested,
+                    }.contains(item.status),
+                  )
+                  .length;
+              final completed = bookings
+                  .where((item) => item.status == BookingStatus.completed)
+                  .length;
+              return ListView(
+                padding: const EdgeInsets.all(18),
+                children: [
+                  Card(
+                    color: Theme.of(context).colorScheme.primaryContainer,
+                    child: Padding(
+                      padding: const EdgeInsets.all(20),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text('Your reputation'),
+                          const SizedBox(height: 8),
+                          Text(
+                            '${average.toStringAsFixed(1)} ★',
+                            style: Theme.of(context).textTheme.headlineMedium,
+                          ),
+                          Text(
+                            '${reviews.length} reviews • $completed completed jobs',
+                          ),
+                        ],
                       ),
-                      Text(
-                        '${profile?.reviewCount ?? 0} reviews • ${profile?.completedBookings ?? 0} completed jobs',
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: _StatCard(
+                          label: 'New requests',
+                          value: pending,
+                          icon: Icons.notifications_active_outlined,
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: _StatCard(
+                          label: 'Active jobs',
+                          value: active,
+                          icon: Icons.handyman_outlined,
+                        ),
                       ),
                     ],
                   ),
-                ),
-              ),
-              const SizedBox(height: 14),
-              Row(
-                children: [
-                  Expanded(
-                    child: _StatCard(
-                      label: 'New requests',
-                      value: pending,
-                      icon: Icons.notifications_active_outlined,
-                    ),
+                  const SizedBox(height: 22),
+                  Text(
+                    'Recent bookings',
+                    style: Theme.of(context).textTheme.titleLarge,
                   ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: _StatCard(
-                      label: 'Active jobs',
-                      value: active,
-                      icon: Icons.handyman_outlined,
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 22),
-              Text(
-                'Recent bookings',
-                style: Theme.of(context).textTheme.titleLarge,
-              ),
-              const SizedBox(height: 8),
-              if (!snapshot.hasData)
-                const LinearProgressIndicator()
-              else if (bookings.isEmpty)
-                const SizedBox(
-                  height: 220,
-                  child: EmptyView(
-                    icon: Icons.calendar_month_outlined,
-                    title: 'No bookings yet',
-                    message: 'Your booking requests will appear here.',
-                  ),
-                )
-              else
-                ...bookings
-                    .take(5)
-                    .map(
-                      (booking) => Card(
-                        child: ListTile(
-                          onTap: () => context.push('/booking/${booking.id}'),
-                          title: Text(booking.serviceTitle),
-                          subtitle: Text(
-                            '${booking.scheduleDateKey} • ${booking.timeWindow.name}',
-                          ),
-                          trailing: BookingStatusChip(status: booking.status),
-                        ),
+                  const SizedBox(height: 8),
+                  if (!bookingSnapshot.hasData)
+                    const LinearProgressIndicator()
+                  else if (bookings.isEmpty)
+                    const SizedBox(
+                      height: 220,
+                      child: EmptyView(
+                        icon: Icons.calendar_month_outlined,
+                        title: 'No bookings yet',
+                        message: 'Your booking requests will appear here.',
                       ),
-                    ),
-            ],
+                    )
+                  else
+                    ...bookings
+                        .take(5)
+                        .map(
+                          (booking) => Card(
+                            child: ListTile(
+                              onTap: () =>
+                                  context.push('/booking/${booking.id}'),
+                              title: Text(booking.serviceTitle),
+                              subtitle: Text(
+                                '${booking.scheduleDateKey} • ${booking.timeWindow.name}',
+                              ),
+                              trailing: BookingStatusChip(
+                                status: booking.status,
+                              ),
+                            ),
+                          ),
+                        ),
+                ],
+              );
+            },
           );
         },
       ),
@@ -535,7 +550,6 @@ class _ServiceEditorScreenState extends ConsumerState<ServiceEditorScreen> {
   late final TextEditingController _price;
   String? _categoryId;
   ServiceStatus _status = ServiceStatus.active;
-  XFile? _image;
   bool _loading = false;
 
   @override
@@ -556,21 +570,12 @@ class _ServiceEditorScreenState extends ConsumerState<ServiceEditorScreen> {
     super.dispose();
   }
 
-  Future<void> _pickImage() async {
-    final image = await ImagePicker().pickImage(
-      source: ImageSource.gallery,
-      imageQuality: 82,
-      maxWidth: 1600,
-    );
-    if (image != null) setState(() => _image = image);
-  }
-
   Future<void> _save(AppUserProfile user, ProviderProfile provider) async {
     if (!_formKey.currentState!.validate() || _categoryId == null) return;
     setState(() => _loading = true);
     try {
       final repository = ref.read(marketplaceRepositoryProvider);
-      var serviceId = await repository.saveService(
+      await repository.saveService(
         serviceId: widget.service?.id,
         providerId: user.id,
         providerName: provider.publicName,
@@ -581,32 +586,7 @@ class _ServiceEditorScreenState extends ConsumerState<ServiceEditorScreen> {
         districtCode: provider.districtCode,
         areaLabels: provider.serviceAreaLabels,
         status: _status,
-        coverImageUrl: widget.service?.coverImageUrl,
       );
-      if (_image != null) {
-        final bytes = await _image!.readAsBytes();
-        final extension = _image!.name.toLowerCase().endsWith('.png')
-            ? 'png'
-            : 'jpg';
-        final url = await repository.uploadImage(
-          path: 'services/${user.id}/$serviceId/cover.$extension',
-          bytes: bytes,
-          contentType: extension == 'png' ? 'image/png' : 'image/jpeg',
-        );
-        serviceId = await repository.saveService(
-          serviceId: serviceId,
-          providerId: user.id,
-          providerName: provider.publicName,
-          categoryId: _categoryId!,
-          title: _title.text,
-          description: _description.text,
-          priceBdt: int.parse(_price.text),
-          districtCode: provider.districtCode,
-          areaLabels: provider.serviceAreaLabels,
-          status: _status,
-          coverImageUrl: url,
-        );
-      }
       if (mounted) context.pop();
     } catch (error) {
       if (mounted) showMessage(context, friendlyError(error), error: true);
@@ -643,30 +623,19 @@ class _ServiceEditorScreenState extends ConsumerState<ServiceEditorScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    InkWell(
-                      onTap: _pickImage,
-                      borderRadius: BorderRadius.circular(20),
-                      child: Container(
-                        height: 160,
-                        decoration: BoxDecoration(
-                          color: Theme.of(context).colorScheme.primaryContainer,
-                          borderRadius: BorderRadius.circular(20),
-                          image: widget.service?.coverImageUrl == null
-                              ? null
-                              : DecorationImage(
-                                  image: NetworkImage(
-                                    widget.service!.coverImageUrl!,
-                                  ),
-                                  fit: BoxFit.cover,
-                                ),
-                        ),
-                        child: Center(
-                          child: Text(
-                            _image == null
-                                ? 'Tap to choose cover image'
-                                : _image!.name,
-                          ),
-                        ),
+                    Container(
+                      height: 120,
+                      decoration: BoxDecoration(
+                        color: Theme.of(context).colorScheme.primaryContainer,
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                      child: const Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(Icons.home_repair_service, size: 42),
+                          SizedBox(height: 8),
+                          Text('Category artwork is used on the free plan.'),
+                        ],
                       ),
                     ),
                     const SizedBox(height: 16),

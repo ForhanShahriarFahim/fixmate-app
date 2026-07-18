@@ -21,13 +21,13 @@ Administration is performed through Firebase Console for the first beta.
 1. Require the request from the registered email and verify ownership.
 2. Check that no booking is pending, accepted, in progress, awaiting completion, or disputed.
 3. Resolve or cancel eligible bookings first.
-4. Delete the Authentication user individually in Firebase Console. Do not bulk delete: individual deletion triggers `cleanupDeletedAuthUser`.
-5. Confirm that the private user/profile data and Storage prefixes were removed. Review Cloud Functions logs if cleanup fails.
+4. If the user could start deletion in the app, confirm that authored messages, reviews, services, provider profile, and booking contact details were removed.
+5. If the user cannot access the app, manually remove those records and anonymize the user's booking name/contact snapshots before deleting the Authentication identity.
+6. Retain only the pseudonymous `users/{uid}` deletion marker and moderation identifiers needed for security handling; remove all name, email, and phone values.
 
 ## Operational checks
 
 - Review Crashlytics for new fatal issues before promoting a build.
-- Review Functions error rate, invocation count, and billing alerts weekly during beta.
+- Review Firestore daily reads/writes and storage usage so the Spark quota remains healthy.
 - Keep App Check in monitoring until internal Android builds show valid Play Integrity traffic, then enforce it deliberately.
 - Never put service-account JSON, Firebase Admin credentials, or private API keys in GitHub or FlutLab source.
-

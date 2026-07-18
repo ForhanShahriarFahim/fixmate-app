@@ -261,6 +261,10 @@ class Booking {
     this.createdAt,
     this.updatedAt,
     this.contactReleasedAt,
+    this.lastMessageId,
+    this.lastMessageAt,
+    this.lastMessageSenderId,
+    this.lastMessagePreview,
   });
 
   factory Booking.fromDocument(
@@ -298,6 +302,10 @@ class Booking {
       createdAt: dateFrom(data['createdAt']),
       updatedAt: dateFrom(data['updatedAt']),
       contactReleasedAt: dateFrom(data['contactReleasedAt']),
+      lastMessageId: data['lastMessageId'] as String?,
+      lastMessageAt: dateFrom(data['lastMessageAt']),
+      lastMessageSenderId: data['lastMessageSenderId'] as String?,
+      lastMessagePreview: data['lastMessagePreview'] as String?,
     );
   }
 
@@ -319,6 +327,10 @@ class Booking {
   final DateTime? createdAt;
   final DateTime? updatedAt;
   final DateTime? contactReleasedAt;
+  final String? lastMessageId;
+  final DateTime? lastMessageAt;
+  final String? lastMessageSenderId;
+  final String? lastMessagePreview;
 
   bool get isTerminal => <BookingStatus>{
     BookingStatus.rejected,

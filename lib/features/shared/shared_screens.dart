@@ -47,7 +47,7 @@ class _CustomerShellState extends State<CustomerShell> {
         NavigationDestination(
           icon: Icon(Icons.notifications_outlined),
           selectedIcon: Icon(Icons.notifications),
-          label: 'Alerts',
+          label: 'Activity',
         ),
         NavigationDestination(
           icon: Icon(Icons.person_outline),
@@ -113,7 +113,7 @@ class _ProviderShellState extends ConsumerState<ProviderShell> {
               NavigationDestination(
                 icon: Icon(Icons.notifications_outlined),
                 selectedIcon: Icon(Icons.notifications),
-                label: 'Alerts',
+                label: 'Activity',
               ),
               NavigationDestination(
                 icon: Icon(Icons.person_outline),
@@ -136,11 +136,11 @@ class NotificationScreen extends ConsumerWidget {
     final user = ref.watch(currentUserProfileProvider).value;
     if (user == null) return const Scaffold(body: LoadingView());
     return Scaffold(
-      appBar: AppBar(title: const Text('Notifications')),
+      appBar: AppBar(title: const Text('Activity')),
       body: StreamBuilder<List<FixMateNotification>>(
         stream: ref
             .read(marketplaceRepositoryProvider)
-            .watchNotifications(user.id),
+            .watchActivity(uid: user.id, role: user.role),
         builder: (context, snapshot) {
           if (snapshot.hasError) {
             return ErrorView(message: friendlyError(snapshot.error!));
@@ -149,8 +149,8 @@ class NotificationScreen extends ConsumerWidget {
           if (snapshot.data!.isEmpty) {
             return const EmptyView(
               icon: Icons.notifications_none,
-              title: 'No notifications',
-              message: 'Booking and chat updates will appear here.',
+              title: 'No activity',
+              message: 'Booking and message activity will appear here.',
             );
           }
           return ListView.separated(
@@ -160,22 +160,11 @@ class NotificationScreen extends ConsumerWidget {
             itemBuilder: (context, index) {
               final item = snapshot.data![index];
               return Card(
-                color: item.readAt == null
-                    ? Theme.of(context).colorScheme.primaryContainer
-                    : null,
                 child: ListTile(
                   leading: Icon(_notificationIcon(item.type)),
                   title: Text(item.title),
                   subtitle: Text(item.body),
-                  trailing: item.readAt == null
-                      ? const Icon(Icons.circle, size: 10)
-                      : null,
-                  onTap: () async {
-                    if (item.readAt == null) {
-                      await ref
-                          .read(marketplaceRepositoryProvider)
-                          .markNotificationRead(user.id, item.id);
-                    }
+                  onTap: () {
                     if (context.mounted && item.route.startsWith('/')) {
                       context.push(item.route);
                     }
@@ -267,7 +256,7 @@ class ProfileScreen extends ConsumerWidget {
         title: const Text('Delete account permanently?'),
         content: const Text(
           'You must first cancel pending or accepted bookings. In-progress or disputed bookings must be resolved with support. '
-          'Your profile, services, messages, media, and reviews will be removed.',
+          'Your profile, services, messages, and reviews will be removed. Historical bookings are anonymized.',
         ),
         actions: [
           TextButton(
@@ -317,7 +306,7 @@ class ProfileScreen extends ConsumerWidget {
       await ref.read(authRepositoryProvider).reauthenticate(password);
       await ref
           .read(marketplaceRepositoryProvider)
-          .call('requestAccountDeletion', const <String, dynamic>{});
+          .runMutation('requestAccountDeletion', const <String, dynamic>{});
       if (context.mounted) context.go('/login');
     } catch (error) {
       if (context.mounted) {
@@ -419,11 +408,6 @@ class ProfileScreen extends ConsumerWidget {
               const SizedBox(height: 12),
               OutlinedButton.icon(
                 onPressed: () async {
-                  try {
-                    await ref.read(notificationServiceProvider).clearForUser();
-                  } catch (_) {
-                    // Authentication sign-out must still proceed offline.
-                  }
                   await ref.read(authRepositoryProvider).signOut();
                   if (context.mounted) context.go('/login');
                 },
@@ -466,7 +450,7 @@ class LegalDocumentScreen extends StatelessWidget {
       ),
       _ => (
         'Privacy Policy',
-        'FixMate stores account details, provider profiles, booking addresses, messages, reviews, device tokens, and moderation reports to operate and secure the marketplace. '
+        'FixMate stores account details, provider profiles, booking addresses, messages, reviews, and moderation reports to operate and secure the marketplace. '
             'Addresses and phone numbers are limited to booking participants and released to providers only after acceptance. Crashlytics collects diagnostic data. '
             'Account deletion removes personal content and anonymizes limited historical and moderation records as described in the full policy.',
         AppConstants.privacyUrl,

@@ -8,23 +8,45 @@ service cloud.firestore {
     }
     function ownUser() { return userDoc(request.auth.uid); }
     function activeUser() {
-      return signedIn() && ownUser().data.status == 'active' &&
-        ownUser().data.isAdultConfirmed == true && ownUser().data.termsVersion == '1.0' &&
-        request.auth.token.email_verified == true;
+      return signedIn() &&
+        request.auth.token.email_verified == true &&
+        ownUser().data.status == 'active' &&
+        ownUser().data.isAdultConfirmed == true &&
+        ownUser().data.termsVersion == '1.0';
+    }
+    function deletingUser() {
+      return signedIn() && ownUser().data.status == 'deletionPending';
     }
     function approvedProvider() {
       return activeUser() && ownUser().data.role == 'provider' &&
         get(/databases/$(database)/documents/provider_profiles/$(request.auth.uid)).data.approvalStatus == 'approved';
     }
-    function booking(bookingId) {
+    function bookingDoc(bookingId) {
       return get(/databases/$(database)/documents/bookings/$(bookingId));
     }
-    function bookingParticipant(bookingId) {
-      return signedIn() &&
-        (booking(bookingId).data.customerId == request.auth.uid ||
-         booking(bookingId).data.providerId == request.auth.uid);
+    function bookingAfter(bookingId) {
+      return getAfter(/databases/$(database)/documents/bookings/$(bookingId));
     }
-    function validAccount(data) {
+    function participant(data) {
+      return signedIn() &&
+        (data.customerId == request.auth.uid || data.providerId == request.auth.uid);
+    }
+    function bookingParticipant(bookingId) {
+      return participant(bookingDoc(bookingId).data);
+    }
+    function otherParticipant(data) {
+      return data.customerId == request.auth.uid ? data.providerId : data.customerId;
+    }
+    function slotId(data) {
+      return data.providerId + '_' + data.scheduleDateKey + '_' + data.timeWindow;
+    }
+    function slotExistsAfter(data) {
+      return existsAfter(/databases/$(database)/documents/provider_slots/$(slotId(data)));
+    }
+    function slotAfter(data) {
+      return getAfter(/databases/$(database)/documents/provider_slots/$(slotId(data)));
+    }
+    function validActiveAccount(data) {
       return data.displayName is string && data.displayName.size() >= 2 && data.displayName.size() <= 80 &&
         data.email is string && data.email == request.auth.token.email &&
         data.phoneE164 is string && data.phoneE164.size() >= 11 && data.phoneE164.size() <= 20 &&
@@ -34,7 +56,7 @@ service cloud.firestore {
     function validProviderProfile(data, uid) {
       return data.providerId == uid &&
         data.publicName is string && data.publicName.size() >= 2 && data.publicName.size() <= 80 &&
-        (data.avatarUrl == null || data.avatarUrl is string) &&
+        data.avatarUrl == null &&
         data.bio is string && data.bio.size() >= 20 && data.bio.size() <= 500 &&
         data.experienceYears is int && data.experienceYears >= 0 && data.experienceYears <= 60 &&
         data.divisionCode is string && data.divisionCode.size() > 0 &&
@@ -43,9 +65,7 @@ service cloud.firestore {
         data.serviceAreaLabels.size() >= 1 && data.serviceAreaLabels.size() <= 10 &&
         data.serviceAreaKeys.size() == data.serviceAreaLabels.size() &&
         data.approvalStatus in ['pending', 'approved', 'rejected'] &&
-        data.ratingAverage is number && data.ratingAverage >= 0 && data.ratingAverage <= 5 &&
-        data.reviewCount is int && data.reviewCount >= 0 &&
-        data.completedBookings is int && data.completedBookings >= 0;
+        data.ratingAverage == 0 && data.reviewCount == 0 && data.completedBookings == 0;
     }
     function validService(data) {
       return data.providerId is string && data.providerName is string &&
@@ -55,15 +75,139 @@ service cloud.firestore {
         data.title is string && data.title.size() >= 3 && data.title.size() <= 80 &&
         data.description is string && data.description.size() >= 20 && data.description.size() <= 1000 &&
         data.priceBdt is int && data.priceBdt > 0 && data.priceBdt <= 1000000 &&
-        (data.coverImageUrl == null || data.coverImageUrl is string) &&
+        data.coverImageUrl == null &&
         data.districtCode is string && data.districtCode.size() > 0 &&
         data.areaLabels is list && data.areaKeys is list &&
         data.areaLabels.size() >= 1 && data.areaLabels.size() <= 10 &&
         data.areaKeys.size() == data.areaLabels.size() &&
         data.searchTokens is list && data.searchTokens.size() <= 20 &&
         data.status in ['active', 'archived'] &&
-        data.providerRating is number && data.providerRating >= 0 && data.providerRating <= 5 &&
-        data.reviewCount is int && data.reviewCount >= 0;
+        data.providerRating == 0 && data.reviewCount == 0;
+    }
+    function validBookingShape(data) {
+      return data.customerId is string && data.providerId is string && data.customerId != data.providerId &&
+        data.serviceId is string && data.customerName is string && data.providerName is string &&
+        data.serviceTitle is string && data.scheduleDateKey is string &&
+        data.scheduledStart is timestamp && data.timeWindow in ['morning', 'afternoon', 'evening'] &&
+        data.divisionCode is string && data.districtCode is string &&
+        data.areaLabel is string && data.areaKey is string &&
+        data.priceBdt is int && data.priceBdt > 0 &&
+        data.status in ['pending', 'accepted', 'rejected', 'cancelled', 'inProgress', 'completionRequested', 'completed', 'disputed'] &&
+        data.paymentStatus in ['unpaid', 'paidCash', 'disputed'] &&
+        data.notes is string && data.notes.size() <= 500 &&
+        (data.lastMessagePreview == null ||
+          (data.lastMessagePreview is string && data.lastMessagePreview.size() <= 120));
+    }
+    function immutableBookingFields() {
+      return request.resource.data.customerId == resource.data.customerId &&
+        request.resource.data.providerId == resource.data.providerId &&
+        request.resource.data.serviceId == resource.data.serviceId &&
+        request.resource.data.scheduleDateKey == resource.data.scheduleDateKey &&
+        request.resource.data.scheduledStart == resource.data.scheduledStart &&
+        request.resource.data.timeWindow == resource.data.timeWindow &&
+        request.resource.data.divisionCode == resource.data.divisionCode &&
+        request.resource.data.districtCode == resource.data.districtCode &&
+        request.resource.data.areaLabel == resource.data.areaLabel &&
+        request.resource.data.areaKey == resource.data.areaKey &&
+        request.resource.data.priceBdt == resource.data.priceBdt &&
+        request.resource.data.createdAt == resource.data.createdAt;
+    }
+    function eventMatches(bookingId, status) {
+      return request.resource.data.lastEventId is string &&
+        request.resource.data.lastEventId != resource.data.lastEventId &&
+        existsAfter(/databases/$(database)/documents/bookings/$(bookingId)/events/$(request.resource.data.lastEventId)) &&
+        getAfter(/databases/$(database)/documents/bookings/$(bookingId)/events/$(request.resource.data.lastEventId)).data.type == status &&
+        getAfter(/databases/$(database)/documents/bookings/$(bookingId)/events/$(request.resource.data.lastEventId)).data.actorId == request.auth.uid &&
+        getAfter(/databases/$(database)/documents/bookings/$(bookingId)/events/$(request.resource.data.lastEventId)).data.createdAt == request.time;
+    }
+    function validReason(value, detailsRequired) {
+      return value is map && value.reason is string && value.reason.size() > 0 && value.reason.size() <= 80 &&
+        value.details is string && value.details.size() <= 1000 &&
+        (!detailsRequired || value.details.size() >= 3) &&
+        value.actorId == request.auth.uid && value.createdAt == request.time;
+    }
+    function validRejection(value) {
+      return value is map && value.reason is string && value.reason.size() > 0 && value.reason.size() <= 500 &&
+        value.actorId == request.auth.uid && value.createdAt == request.time;
+    }
+    function acceptedTransition(bookingId) {
+      return ownUser().data.role == 'provider' && resource.data.providerId == request.auth.uid &&
+        resource.data.status == 'pending' && request.resource.data.status == 'accepted' &&
+        request.resource.data.contactReleasedAt == request.time &&
+        request.resource.data.updatedAt == request.time &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'status', 'contactReleasedAt', 'lastEventId', 'updatedAt'
+        ]) && eventMatches(bookingId, 'accepted') &&
+        slotExistsAfter(request.resource.data) &&
+        slotAfter(request.resource.data).data.bookingId == bookingId &&
+        getAfter(/databases/$(database)/documents/bookings/$(bookingId)/private/contact).data.providerPhone == ownUser().data.phoneE164;
+    }
+    function rejectedTransition(bookingId) {
+      return ownUser().data.role == 'provider' && resource.data.providerId == request.auth.uid &&
+        resource.data.status == 'pending' && request.resource.data.status == 'rejected' &&
+        validRejection(request.resource.data.rejection) &&
+        request.resource.data.updatedAt == request.time &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'status', 'rejection', 'lastEventId', 'updatedAt'
+        ]) && eventMatches(bookingId, 'rejected');
+    }
+    function providerTransition(bookingId, from, to) {
+      return ownUser().data.role == 'provider' && resource.data.providerId == request.auth.uid &&
+        resource.data.status == from && request.resource.data.status == to &&
+        request.resource.data.updatedAt == request.time &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'status', 'lastEventId', 'updatedAt'
+        ]) && eventMatches(bookingId, to) && slotExistsAfter(request.resource.data) &&
+        slotAfter(request.resource.data).data.bookingId == bookingId;
+    }
+    function completedTransition(bookingId) {
+      return ownUser().data.role == 'customer' && resource.data.customerId == request.auth.uid &&
+        resource.data.status == 'completionRequested' && request.resource.data.status == 'completed' &&
+        resource.data.paymentStatus == 'unpaid' && request.resource.data.paymentStatus == 'paidCash' &&
+        request.resource.data.completedAt == request.time && request.resource.data.updatedAt == request.time &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'status', 'paymentStatus', 'completedAt', 'lastEventId', 'updatedAt'
+        ]) && eventMatches(bookingId, 'completed') && !slotExistsAfter(request.resource.data);
+    }
+    function disputedTransition(bookingId) {
+      return ownUser().data.role == 'customer' && resource.data.customerId == request.auth.uid &&
+        resource.data.status == 'completionRequested' && request.resource.data.status == 'disputed' &&
+        request.resource.data.paymentStatus == 'disputed' &&
+        validReason(request.resource.data.dispute, true) && request.resource.data.updatedAt == request.time &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'status', 'paymentStatus', 'dispute', 'lastEventId', 'updatedAt'
+        ]) && eventMatches(bookingId, 'disputed') && !slotExistsAfter(request.resource.data);
+    }
+    function cancelledTransition(bookingId) {
+      return participant(resource.data) && resource.data.status in ['pending', 'accepted'] &&
+        request.resource.data.status == 'cancelled' &&
+        validReason(request.resource.data.cancellation, false) && request.resource.data.updatedAt == request.time &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'status', 'cancellation', 'lastEventId', 'updatedAt'
+        ]) && eventMatches(bookingId, 'cancelled') &&
+        (resource.data.status == 'pending' || !slotExistsAfter(request.resource.data));
+    }
+    function validMessageMetadata(bookingId) {
+      return participant(resource.data) && resource.data.status in ['accepted', 'inProgress', 'completionRequested'] &&
+        request.resource.data.status == resource.data.status &&
+        request.resource.data.lastMessageId is string &&
+        request.resource.data.lastMessageSenderId == request.auth.uid &&
+        request.resource.data.lastMessageAt == request.time && request.resource.data.updatedAt == request.time &&
+        request.resource.data.lastMessagePreview is string && request.resource.data.lastMessagePreview.size() > 0 &&
+        request.resource.data.lastMessagePreview.size() <= 120 &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'lastMessageId', 'lastMessageAt', 'lastMessageSenderId', 'lastMessagePreview', 'updatedAt'
+        ]) &&
+        existsAfter(/databases/$(database)/documents/bookings/$(bookingId)/messages/$(request.resource.data.lastMessageId)) &&
+        getAfter(/databases/$(database)/documents/bookings/$(bookingId)/messages/$(request.resource.data.lastMessageId)).data.senderId == request.auth.uid;
+    }
+    function validAnonymization() {
+      return deletingUser() && participant(resource.data) && request.resource.data.status == resource.data.status &&
+        request.resource.data.updatedAt == request.time &&
+        ((resource.data.customerId == request.auth.uid && request.resource.data.customerName == 'Deleted user' &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['customerName', 'updatedAt'])) ||
+         (resource.data.providerId == request.auth.uid && request.resource.data.providerName == 'Deleted provider' &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['providerName', 'updatedAt'])));
     }
 
     match /users/{uid} {
@@ -71,22 +215,33 @@ service cloud.firestore {
         request.resource.data.keys().hasOnly([
           'displayName', 'email', 'phoneE164', 'role', 'status', 'photoPath',
           'termsVersion', 'termsAcceptedAt', 'isAdultConfirmed', 'createdAt', 'updatedAt'
-        ]) && validAccount(request.resource.data) &&
-        (request.resource.data.photoPath == null || request.resource.data.photoPath is string) &&
+        ]) && validActiveAccount(request.resource.data) && request.resource.data.photoPath == null &&
         request.resource.data.termsAcceptedAt == request.time &&
         request.resource.data.createdAt == request.time && request.resource.data.updatedAt == request.time;
       allow read: if isSelf(uid);
-      allow update: if isSelf(uid) &&
-        validAccount(request.resource.data) &&
-        request.resource.data.role == resource.data.role &&
-        request.resource.data.status == resource.data.status &&
-        request.resource.data.createdAt == resource.data.createdAt &&
-        request.resource.data.termsAcceptedAt == resource.data.termsAcceptedAt &&
-        request.resource.data.isAdultConfirmed == resource.data.isAdultConfirmed &&
-        request.resource.data.updatedAt == request.time &&
-        request.resource.data.diff(resource.data).affectedKeys().hasOnly([
-          'displayName', 'phoneE164', 'photoPath', 'updatedAt'
-        ]);
+      allow update: if isSelf(uid) && (
+        (resource.data.status == 'active' && request.resource.data.status == 'active' &&
+          validActiveAccount(request.resource.data) &&
+          request.resource.data.role == resource.data.role &&
+          request.resource.data.createdAt == resource.data.createdAt &&
+          request.resource.data.termsAcceptedAt == resource.data.termsAcceptedAt &&
+          request.resource.data.isAdultConfirmed == resource.data.isAdultConfirmed &&
+          request.resource.data.updatedAt == request.time &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'displayName', 'phoneE164', 'photoPath', 'updatedAt'
+          ])) ||
+        (resource.data.status == 'active' && request.resource.data.status == 'deletionPending' &&
+          request.resource.data.updatedAt == request.time &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'updatedAt'])) ||
+        (resource.data.status == 'deletionPending' && request.resource.data.status == 'deletionPending' &&
+          request.resource.data.displayName == 'Deleted user' && request.resource.data.email == '' &&
+          request.resource.data.phoneE164 == '' && request.resource.data.photoPath == null &&
+          request.resource.data.role == resource.data.role && request.resource.data.createdAt == resource.data.createdAt &&
+          request.resource.data.updatedAt == request.time &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'displayName', 'email', 'phoneE164', 'photoPath', 'updatedAt'
+          ]))
+      );
       allow delete: if false;
     }
 
@@ -100,23 +255,16 @@ service cloud.firestore {
           'createdAt', 'updatedAt'
         ]) && validProviderProfile(request.resource.data, uid) &&
         request.resource.data.approvalStatus == 'pending' &&
-        request.resource.data.ratingAverage == 0 &&
-        request.resource.data.reviewCount == 0 &&
-        request.resource.data.completedBookings == 0 &&
         request.resource.data.createdAt == request.time && request.resource.data.updatedAt == request.time;
-      allow update: if isSelf(uid) && activeUser() &&
-        validProviderProfile(request.resource.data, uid) &&
+      allow update: if isSelf(uid) && activeUser() && validProviderProfile(request.resource.data, uid) &&
         request.resource.data.providerId == resource.data.providerId &&
         request.resource.data.approvalStatus == resource.data.approvalStatus &&
-        request.resource.data.ratingAverage == resource.data.ratingAverage &&
-        request.resource.data.reviewCount == resource.data.reviewCount &&
-        request.resource.data.completedBookings == resource.data.completedBookings &&
         request.resource.data.updatedAt == request.time &&
         request.resource.data.diff(resource.data).affectedKeys().hasOnly([
-          'publicName', 'avatarUrl', 'bio', 'experienceYears', 'divisionCode',
-          'districtCode', 'serviceAreaLabels', 'serviceAreaKeys', 'updatedAt'
+          'publicName', 'bio', 'experienceYears', 'divisionCode', 'districtCode',
+          'serviceAreaLabels', 'serviceAreaKeys', 'updatedAt'
         ]);
-      allow delete: if false;
+      allow delete: if isSelf(uid) && deletingUser();
     }
 
     match /categories/{categoryId} {
@@ -135,71 +283,160 @@ service cloud.firestore {
         ]) && validService(request.resource.data) &&
         request.resource.data.providerId == request.auth.uid &&
         request.resource.data.providerName == get(/databases/$(database)/documents/provider_profiles/$(request.auth.uid)).data.publicName &&
-        request.resource.data.status in ['active', 'archived'] &&
-        request.resource.data.providerRating == 0 &&
-        request.resource.data.reviewCount == 0 &&
         request.resource.data.createdAt == request.time && request.resource.data.updatedAt == request.time;
       allow update: if approvedProvider() && resource.data.providerId == request.auth.uid &&
-        validService(request.resource.data) &&
-        request.resource.data.providerId == resource.data.providerId &&
+        validService(request.resource.data) && request.resource.data.providerId == resource.data.providerId &&
         request.resource.data.providerName == get(/databases/$(database)/documents/provider_profiles/$(request.auth.uid)).data.publicName &&
-        request.resource.data.providerRating == resource.data.providerRating &&
-        request.resource.data.reviewCount == resource.data.reviewCount &&
         request.resource.data.updatedAt == request.time &&
         request.resource.data.diff(resource.data).affectedKeys().hasOnly([
-          'providerName', 'categoryId', 'title', 'description', 'priceBdt', 'coverImageUrl',
+          'providerName', 'categoryId', 'title', 'description', 'priceBdt',
           'districtCode', 'areaLabels', 'areaKeys', 'searchTokens', 'status', 'updatedAt'
         ]);
-      allow delete: if false;
+      allow delete: if deletingUser() && resource.data.providerId == request.auth.uid;
     }
 
     match /bookings/{bookingId} {
-      allow read: if signedIn() &&
-        (resource.data.customerId == request.auth.uid || resource.data.providerId == request.auth.uid);
-      allow write: if false;
+      allow read: if participant(resource.data);
+      allow create: if activeUser() && ownUser().data.role == 'customer' &&
+        request.resource.data.keys().hasOnly([
+          'customerId', 'providerId', 'serviceId', 'customerName', 'providerName',
+          'serviceTitle', 'scheduleDateKey', 'scheduledStart', 'timeWindow',
+          'divisionCode', 'districtCode', 'areaLabel', 'areaKey', 'priceBdt',
+          'status', 'paymentStatus', 'notes', 'contactReleasedAt', 'cancellation',
+          'rejection', 'dispute', 'completedAt', 'lastEventId', 'lastMessageId',
+          'lastMessageAt', 'lastMessageSenderId', 'lastMessagePreview', 'createdAt', 'updatedAt'
+        ]) && validBookingShape(request.resource.data) &&
+        request.resource.data.customerId == request.auth.uid &&
+        request.resource.data.customerName == ownUser().data.displayName &&
+        request.resource.data.status == 'pending' && request.resource.data.paymentStatus == 'unpaid' &&
+        request.resource.data.scheduledStart > request.time && request.resource.data.contactReleasedAt == null &&
+        request.resource.data.cancellation == null && request.resource.data.rejection == null &&
+        request.resource.data.dispute == null && request.resource.data.completedAt == null &&
+        request.resource.data.lastMessageId == null && request.resource.data.lastMessageAt == null &&
+        request.resource.data.lastMessageSenderId == null && request.resource.data.lastMessagePreview == null &&
+        request.resource.data.createdAt == request.time && request.resource.data.updatedAt == request.time &&
+        get(/databases/$(database)/documents/services/$(request.resource.data.serviceId)).data.status == 'active' &&
+        request.resource.data.providerId == get(/databases/$(database)/documents/services/$(request.resource.data.serviceId)).data.providerId &&
+        request.resource.data.providerName == get(/databases/$(database)/documents/services/$(request.resource.data.serviceId)).data.providerName &&
+        request.resource.data.serviceTitle == get(/databases/$(database)/documents/services/$(request.resource.data.serviceId)).data.title &&
+        request.resource.data.priceBdt == get(/databases/$(database)/documents/services/$(request.resource.data.serviceId)).data.priceBdt &&
+        request.resource.data.districtCode == get(/databases/$(database)/documents/services/$(request.resource.data.serviceId)).data.districtCode &&
+        request.resource.data.areaKey in get(/databases/$(database)/documents/services/$(request.resource.data.serviceId)).data.areaKeys &&
+        get(/databases/$(database)/documents/provider_profiles/$(request.resource.data.providerId)).data.approvalStatus == 'approved' &&
+        get(/databases/$(database)/documents/users/$(request.resource.data.providerId)).data.status == 'active' &&
+        existsAfter(/databases/$(database)/documents/bookings/$(bookingId)/events/$(request.resource.data.lastEventId)) &&
+        getAfter(/databases/$(database)/documents/bookings/$(bookingId)/events/$(request.resource.data.lastEventId)).data.type == 'pending' &&
+        getAfter(/databases/$(database)/documents/bookings/$(bookingId)/events/$(request.resource.data.lastEventId)).data.actorId == request.auth.uid &&
+        getAfter(/databases/$(database)/documents/bookings/$(bookingId)/private/contact).data.customerPhone == ownUser().data.phoneE164;
+      allow update: if validBookingShape(request.resource.data) && immutableBookingFields() &&
+        ((activeUser() && (
+          acceptedTransition(bookingId) || rejectedTransition(bookingId) ||
+          providerTransition(bookingId, 'accepted', 'inProgress') ||
+          providerTransition(bookingId, 'inProgress', 'completionRequested') ||
+          completedTransition(bookingId) || disputedTransition(bookingId) ||
+          cancelledTransition(bookingId) || validMessageMetadata(bookingId)
+        )) || validAnonymization());
+      allow delete: if false;
 
       match /private/{documentId} {
         allow read: if bookingParticipant(bookingId) &&
-          (booking(bookingId).data.customerId == request.auth.uid ||
-           booking(bookingId).data.contactReleasedAt != null);
-        allow write: if false;
+          (bookingDoc(bookingId).data.customerId == request.auth.uid ||
+           bookingDoc(bookingId).data.contactReleasedAt != null);
+        allow create: if documentId == 'contact' && activeUser() && ownUser().data.role == 'customer' &&
+          request.resource.data.keys().hasOnly(['customerPhone', 'providerPhone', 'address', 'landmark']) &&
+          bookingAfter(bookingId).data.customerId == request.auth.uid &&
+          bookingAfter(bookingId).data.status == 'pending' &&
+          request.resource.data.customerPhone == ownUser().data.phoneE164 &&
+          request.resource.data.providerPhone == '' &&
+          request.resource.data.address is string && request.resource.data.address.size() >= 5 && request.resource.data.address.size() <= 500 &&
+          request.resource.data.landmark is string && request.resource.data.landmark.size() <= 200;
+        allow update: if documentId == 'contact' && (
+          (activeUser() && ownUser().data.role == 'provider' &&
+            bookingDoc(bookingId).data.providerId == request.auth.uid &&
+            bookingDoc(bookingId).data.status == 'pending' && bookingAfter(bookingId).data.status == 'accepted' &&
+            request.resource.data.providerPhone == ownUser().data.phoneE164 &&
+            request.resource.data.diff(resource.data).affectedKeys().hasOnly(['providerPhone'])) ||
+          (deletingUser() && bookingParticipant(bookingId) &&
+            ((bookingDoc(bookingId).data.customerId == request.auth.uid &&
+              request.resource.data.customerPhone == '' && request.resource.data.address == '' && request.resource.data.landmark == '' &&
+              request.resource.data.diff(resource.data).affectedKeys().hasOnly(['customerPhone', 'address', 'landmark'])) ||
+             (bookingDoc(bookingId).data.providerId == request.auth.uid && request.resource.data.providerPhone == '' &&
+              request.resource.data.diff(resource.data).affectedKeys().hasOnly(['providerPhone']))))
+        );
+        allow delete: if false;
       }
+
       match /events/{eventId} {
         allow read: if bookingParticipant(bookingId);
-        allow write: if false;
+        allow create: if activeUser() && participant(bookingAfter(bookingId).data) &&
+          bookingAfter(bookingId).data.lastEventId == eventId &&
+          request.resource.data.keys().hasOnly(['type', 'actorId', 'createdAt']) &&
+          request.resource.data.type == bookingAfter(bookingId).data.status &&
+          request.resource.data.actorId == request.auth.uid && request.resource.data.createdAt == request.time;
+        allow update, delete: if false;
       }
+
       match /messages/{messageId} {
         allow read: if bookingParticipant(bookingId);
-        allow write: if false;
+        allow create: if activeUser() && participant(bookingAfter(bookingId).data) &&
+          bookingAfter(bookingId).data.status in ['accepted', 'inProgress', 'completionRequested'] &&
+          !exists(/databases/$(database)/documents/blocks/$(request.auth.uid)/users/$(otherParticipant(bookingAfter(bookingId).data))) &&
+          !exists(/databases/$(database)/documents/blocks/$(otherParticipant(bookingAfter(bookingId).data))/users/$(request.auth.uid)) &&
+          bookingAfter(bookingId).data.lastMessageId == messageId &&
+          bookingAfter(bookingId).data.lastMessageSenderId == request.auth.uid &&
+          request.resource.data.keys().hasOnly(['senderId', 'text', 'createdAt', 'readAt']) &&
+          request.resource.data.senderId == request.auth.uid &&
+          request.resource.data.text is string && request.resource.data.text.size() > 0 && request.resource.data.text.size() <= 1000 &&
+          request.resource.data.createdAt == request.time && request.resource.data.readAt == null;
+        allow update: if false;
+        allow delete: if deletingUser() && resource.data.senderId == request.auth.uid;
       }
+    }
+
+    match /provider_slots/{providerSlotId} {
+      // Approved providers must be able to read a non-existent slot before
+      // atomically claiming it. Slot documents contain no contact data.
+      allow get: if approvedProvider();
+      allow list: if false;
+      allow create: if approvedProvider() &&
+        request.resource.data.keys().hasOnly(['providerId', 'bookingId', 'scheduleDateKey', 'timeWindow', 'createdAt']) &&
+        request.resource.data.providerId == request.auth.uid && request.resource.data.createdAt == request.time &&
+        providerSlotId == slotId(bookingAfter(request.resource.data.bookingId).data) &&
+        bookingDoc(request.resource.data.bookingId).data.status == 'pending' &&
+        bookingAfter(request.resource.data.bookingId).data.status == 'accepted' &&
+        bookingAfter(request.resource.data.bookingId).data.providerId == request.auth.uid &&
+        request.resource.data.scheduleDateKey == bookingAfter(request.resource.data.bookingId).data.scheduleDateKey &&
+        request.resource.data.timeWindow == bookingAfter(request.resource.data.bookingId).data.timeWindow;
+      allow update: if false;
+      allow delete: if activeUser() && participant(bookingAfter(resource.data.bookingId).data) &&
+        providerSlotId == slotId(bookingAfter(resource.data.bookingId).data) &&
+        bookingDoc(resource.data.bookingId).data.status in ['accepted', 'inProgress', 'completionRequested'] &&
+        !(bookingAfter(resource.data.bookingId).data.status in ['accepted', 'inProgress', 'completionRequested']);
     }
 
     match /reviews/{bookingId} {
       allow read: if true;
-      allow write: if false;
-    }
-
-    match /notifications/{uid}/items/{notificationId} {
-      allow read: if isSelf(uid);
-      allow update: if isSelf(uid) &&
-        request.resource.data.readAt == request.time &&
-        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['readAt']);
-      allow create, delete: if false;
-    }
-
-    match /device_tokens/{uid}/tokens/{tokenId} {
-      allow read: if isSelf(uid);
-      allow create, update: if isSelf(uid) &&
-        request.resource.data.keys().hasOnly(['token', 'platform', 'updatedAt']) &&
-        request.resource.data.token is string && request.resource.data.token.size() > 20 &&
-        request.resource.data.token.size() <= 4096 &&
-        request.resource.data.platform == 'android' && request.resource.data.updatedAt == request.time;
-      allow delete: if isSelf(uid);
+      allow create: if activeUser() && ownUser().data.role == 'customer' &&
+        request.resource.data.keys().hasOnly([
+          'bookingId', 'customerId', 'customerName', 'providerId', 'serviceId',
+          'rating', 'comment', 'createdAt'
+        ]) && request.resource.data.bookingId == bookingId &&
+        request.resource.data.customerId == request.auth.uid &&
+        bookingDoc(bookingId).data.customerId == request.auth.uid &&
+        bookingDoc(bookingId).data.status == 'completed' &&
+        request.resource.data.customerName == bookingDoc(bookingId).data.customerName &&
+        request.resource.data.providerId == bookingDoc(bookingId).data.providerId &&
+        request.resource.data.serviceId == bookingDoc(bookingId).data.serviceId &&
+        request.resource.data.rating is int && request.resource.data.rating >= 1 && request.resource.data.rating <= 5 &&
+        request.resource.data.comment is string && request.resource.data.comment.size() <= 500 &&
+        request.resource.data.createdAt == request.time;
+      allow update: if false;
+      allow delete: if deletingUser() && resource.data.customerId == request.auth.uid;
     }
 
     match /blocks/{uid}/users/{blockedUid} {
-      allow read: if isSelf(uid);
-      allow create, update: if isSelf(uid) && blockedUid != uid &&
+      allow read: if isSelf(uid) || (signedIn() && blockedUid == request.auth.uid);
+      allow create, update: if activeUser() && isSelf(uid) && blockedUid != uid &&
         request.resource.data.keys().hasOnly(['blockedUid', 'createdAt']) &&
         request.resource.data.blockedUid == blockedUid && request.resource.data.createdAt == request.time;
       allow delete: if isSelf(uid);
@@ -207,7 +444,22 @@ service cloud.firestore {
 
     match /reports/{reportId} {
       allow read: if signedIn() && resource.data.reporterId == request.auth.uid;
-      allow write: if false;
+      allow create: if activeUser() &&
+        request.resource.data.keys().hasOnly([
+          'reporterId', 'targetType', 'targetId', 'targetUserId', 'bookingId',
+          'reason', 'details', 'status', 'moderationNotes', 'createdAt', 'updatedAt'
+        ]) && request.resource.data.reporterId == request.auth.uid &&
+        bookingParticipant(request.resource.data.bookingId) &&
+        request.resource.data.targetType in ['user', 'message'] &&
+        request.resource.data.targetUserId == otherParticipant(bookingDoc(request.resource.data.bookingId).data) &&
+        ((request.resource.data.targetType == 'user' && request.resource.data.targetId == request.resource.data.targetUserId) ||
+         (request.resource.data.targetType == 'message' &&
+          get(/databases/$(database)/documents/bookings/$(request.resource.data.bookingId)/messages/$(request.resource.data.targetId)).data.senderId == request.resource.data.targetUserId)) &&
+        request.resource.data.reason in ['abusive_content', 'harassment', 'spam', 'fraud', 'unsafe_behavior', 'objectionable_content', 'other'] &&
+        request.resource.data.details is string && request.resource.data.details.size() <= 1000 &&
+        request.resource.data.status == 'open' && request.resource.data.moderationNotes == '' &&
+        request.resource.data.createdAt == request.time && request.resource.data.updatedAt == request.time;
+      allow update, delete: if false;
     }
 
     match /{document=**} { allow read, write: if false; }
