@@ -24,6 +24,15 @@ configuration for Firebase project `fixmate-ce36d`. Successful Firebase
 initialization enters the authentication flow; a wrong/missing project identity
 or initialization failure still shows a safe setup-required screen.
 
+The merged `main` branch was also imported successfully into FlutLab on
+5 August 2026 after adding the standard `ios/` recognition scaffold. FlutLab's
+available Flutter 3.41 builder resolved to Flutter `3.41.7`; dependency
+resolution and all 15 Flutter tests passed there. The account's Android APK
+builder invokes `assembleRelease`, so the unsigned cloud build stopped at the
+repository's intentional release-signing guard. The available Hot Reload action
+was web-only and no Android emulator or device was connected, so an Android
+debug run and startup verification remain manual.
+
 ## Recommended FlutLab import settings
 
 1. Import the public GitHub repository `fixmate-app`; select the repository
@@ -90,12 +99,19 @@ Remaining manual work:
 | `npm test` | Pass; 5 local tooling tests, emulator tests skipped as designed |
 | `npm run test:rules` | Pass; 24/24 emulator cases |
 | `flutter build apk --debug` | Pass; Firebase-connected 174,897,108-byte APK |
+| FlutLab Flutter 3.41.7 `pub get` | Pass |
+| FlutLab Flutter tests | Pass; 15 tests |
+| FlutLab `android-all` build | Expected signing stop; FlutLab invoked `assembleRelease`, and release signing remains fail-closed |
 
 ## Remaining blockers before Play internal testing
 
-- Firebase Android client configuration is complete; device connectivity,
-  Authentication, App Check, and Crashlytics delivery are not yet manually
-  verified.
+- Firebase Android client configuration is complete; FlutLab imported the
+  project and passed dependency resolution/tests, but no Android debug device
+  was available to verify startup, Authentication, App Check, or Crashlytics.
+- FlutLab's current cloud Android APK action invokes a release build. A debug
+  run requires a connected supported Android device/environment; do not bypass
+  the release-signing guard or upload signing material merely to obtain a debug
+  test build.
 - Firestore Rules, all 11 indexes, and the six reviewed category documents are
   deployed; their customer/provider behavior still requires device verification.
 - GitHub Pages legal files are coded but not published or legally reviewed.
