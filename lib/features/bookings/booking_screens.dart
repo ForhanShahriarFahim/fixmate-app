@@ -8,13 +8,21 @@ import 'package:fixmate/core/constants/app_constants.dart';
 import 'package:fixmate/core/data/firebase_providers.dart';
 import 'package:fixmate/core/domain/models.dart';
 import 'package:fixmate/core/utils/error_messages.dart';
+import 'package:fixmate/core/utils/formatters.dart';
 import 'package:fixmate/core/widgets/common_widgets.dart';
 
-class BookingListScreen extends ConsumerWidget {
+class BookingListScreen extends ConsumerStatefulWidget {
   const BookingListScreen({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<BookingListScreen> createState() => _BookingListScreenState();
+}
+
+class _BookingListScreenState extends ConsumerState<BookingListScreen> {
+  int _limit = 50;
+
+  @override
+  Widget build(BuildContext context) {
     final user = ref.watch(currentUserProfileProvider).value;
     if (user == null) return const Scaffold(body: LoadingView());
     return Scaffold(
@@ -22,10 +30,13 @@ class BookingListScreen extends ConsumerWidget {
       body: StreamBuilder<List<Booking>>(
         stream: ref
             .read(marketplaceRepositoryProvider)
-            .watchBookings(uid: user.id, role: user.role),
+            .watchBookings(uid: user.id, role: user.role, limit: _limit),
         builder: (context, snapshot) {
           if (snapshot.hasError) {
-            return ErrorView(message: friendlyError(snapshot.error!));
+            return ErrorView(
+              message: friendlyError(snapshot.error!),
+              onRetry: () => setState(() {}),
+            );
           }
           if (!snapshot.hasData) return const LoadingView();
           if (snapshot.data!.isEmpty) {
@@ -39,9 +50,18 @@ class BookingListScreen extends ConsumerWidget {
           }
           return ListView.separated(
             padding: const EdgeInsets.all(16),
-            itemCount: snapshot.data!.length,
+            itemCount:
+                snapshot.data!.length +
+                (snapshot.data!.length >= _limit ? 1 : 0),
             separatorBuilder: (_, _) => const SizedBox(height: 8),
             itemBuilder: (context, index) {
+              if (index == snapshot.data!.length) {
+                return OutlinedButton.icon(
+                  onPressed: () => setState(() => _limit += 50),
+                  icon: const Icon(Icons.expand_more),
+                  label: const Text('Load older bookings'),
+                );
+              }
               final booking = snapshot.data![index];
               final counterpart = user.role == UserRole.customer
                   ? booking.providerName
@@ -51,7 +71,7 @@ class BookingListScreen extends ConsumerWidget {
                   onTap: () => context.push('/booking/${booking.id}'),
                   title: Text(booking.serviceTitle),
                   subtitle: Text(
-                    '$counterpart\n${booking.scheduleDateKey} • ${_windowLabel(booking.timeWindow)}',
+                    '$counterpart\n${formatBookingSchedule(booking.scheduleDateKey, booking.timeWindow)}',
                   ),
                   isThreeLine: true,
                   trailing: BookingStatusChip(status: booking.status),
@@ -75,11 +95,23 @@ class BookingDetailScreen extends ConsumerWidget {
     String function,
     Map<String, dynamic> data,
   ) async {
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => const PopScope(
+        canPop: false,
+        child: Center(child: CircularProgressIndicator()),
+      ),
+    );
     try {
       await ref.read(marketplaceRepositoryProvider).runMutation(function, data);
-      if (context.mounted) showMessage(context, 'Booking updated.');
+      if (context.mounted) {
+        Navigator.of(context, rootNavigator: true).pop();
+        showMessage(context, 'Booking updated.');
+      }
     } catch (error) {
       if (context.mounted) {
+        Navigator.of(context, rootNavigator: true).pop();
         showMessage(context, friendlyError(error), error: true);
       }
     }
@@ -94,24 +126,39 @@ class BookingDetailScreen extends ConsumerWidget {
     final controller = TextEditingController();
     final result = await showDialog<String>(
       context: context,
-      builder: (context) => AlertDialog(
-        title: Text(title),
-        content: TextField(
-          controller: controller,
-          maxLength: maxLength,
-          maxLines: 4,
-          decoration: InputDecoration(labelText: label),
+      builder: (context) => StatefulBuilder(
+        builder: (context, setState) => AlertDialog(
+          title: Text(title),
+          content: SingleChildScrollView(
+            child: TextField(
+              controller: controller,
+              autofocus: true,
+              maxLength: maxLength,
+              maxLines: 4,
+              onChanged: (_) => setState(() {}),
+              decoration: InputDecoration(
+                labelText: label,
+                errorText:
+                    controller.text.isNotEmpty &&
+                        controller.text.trim().length < 3
+                    ? 'Enter at least 3 characters.'
+                    : null,
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Back'),
+            ),
+            FilledButton(
+              onPressed: controller.text.trim().length < 3
+                  ? null
+                  : () => Navigator.pop(context, controller.text.trim()),
+              child: const Text('Submit'),
+            ),
+          ],
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Back'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, controller.text.trim()),
-            child: const Text('Submit'),
-          ),
-        ],
       ),
     );
     controller.dispose();
@@ -140,31 +187,33 @@ class BookingDetailScreen extends ConsumerWidget {
       builder: (context) => StatefulBuilder(
         builder: (context, setState) => AlertDialog(
           title: const Text('Review service'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: List.generate(
-                  5,
-                  (index) => IconButton(
-                    onPressed: () => setState(() => rating = index + 1),
-                    icon: Icon(
-                      index < rating ? Icons.star : Icons.star_border,
-                      color: Colors.amber,
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: List.generate(
+                    5,
+                    (index) => IconButton(
+                      onPressed: () => setState(() => rating = index + 1),
+                      icon: Icon(
+                        index < rating ? Icons.star : Icons.star_border,
+                        color: Colors.amber,
+                      ),
                     ),
                   ),
                 ),
-              ),
-              TextField(
-                controller: comment,
-                maxLength: 500,
-                maxLines: 3,
-                decoration: const InputDecoration(
-                  labelText: 'Comment (optional)',
+                TextField(
+                  controller: comment,
+                  maxLength: 500,
+                  maxLines: 3,
+                  decoration: const InputDecoration(
+                    labelText: 'Comment (optional)',
+                  ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
           actions: [
             TextButton(
@@ -201,37 +250,49 @@ class BookingDetailScreen extends ConsumerWidget {
       builder: (context) => StatefulBuilder(
         builder: (context, setState) => AlertDialog(
           title: const Text('Report user'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              DropdownButtonFormField<String>(
-                initialValue: reason,
-                decoration: const InputDecoration(labelText: 'Reason'),
-                items: const [
-                  DropdownMenuItem(
-                    value: 'unsafe_behavior',
-                    child: Text('Unsafe behavior'),
-                  ),
-                  DropdownMenuItem(
-                    value: 'harassment',
-                    child: Text('Harassment'),
-                  ),
-                  DropdownMenuItem(value: 'fraud', child: Text('Fraud')),
-                  DropdownMenuItem(value: 'spam', child: Text('Spam')),
-                  DropdownMenuItem(value: 'other', child: Text('Other')),
-                ],
-                onChanged: (value) => setState(() => reason = value ?? reason),
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: detailsController,
-                maxLength: 1000,
-                maxLines: 4,
-                decoration: const InputDecoration(
-                  labelText: 'Details (optional)',
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                DropdownButtonFormField<String>(
+                  initialValue: reason,
+                  decoration: const InputDecoration(labelText: 'Reason'),
+                  items: const [
+                    DropdownMenuItem(
+                      value: 'unsafe_behavior',
+                      child: Text('Unsafe behavior'),
+                    ),
+                    DropdownMenuItem(
+                      value: 'harassment',
+                      child: Text('Harassment'),
+                    ),
+                    DropdownMenuItem(value: 'fraud', child: Text('Fraud')),
+                    DropdownMenuItem(value: 'spam', child: Text('Spam')),
+                    DropdownMenuItem(value: 'other', child: Text('Other')),
+                  ],
+                  onChanged: (value) =>
+                      setState(() => reason = value ?? reason),
                 ),
-              ),
-            ],
+                const SizedBox(height: 12),
+                TextField(
+                  controller: detailsController,
+                  maxLength: 1000,
+                  maxLines: 4,
+                  onChanged: (_) => setState(() {}),
+                  decoration: InputDecoration(
+                    labelText: reason == 'other'
+                        ? 'Details (required)'
+                        : 'Details (optional)',
+                    errorText:
+                        reason == 'other' &&
+                            detailsController.text.isNotEmpty &&
+                            detailsController.text.trim().length < 3
+                        ? 'Enter at least 3 characters.'
+                        : null,
+                  ),
+                ),
+              ],
+            ),
           ),
           actions: [
             TextButton(
@@ -239,7 +300,10 @@ class BookingDetailScreen extends ConsumerWidget {
               child: const Text('Back'),
             ),
             FilledButton(
-              onPressed: () => Navigator.pop(context, true),
+              onPressed:
+                  reason == 'other' && detailsController.text.trim().length < 3
+                  ? null
+                  : () => Navigator.pop(context, true),
               child: const Text('Submit report'),
             ),
           ],
@@ -268,7 +332,7 @@ class BookingDetailScreen extends ConsumerWidget {
       builder: (context) => AlertDialog(
         title: const Text('Block this user?'),
         content: const Text(
-          'Calls and new messages will be disabled. Booking history remains available.',
+          'Calls, new messages, and new bookings between you will be disabled. Existing profiles, booking history, chat history, and already released booking addresses remain visible. You can unblock later from Profile → Blocked users.',
         ),
         actions: [
           TextButton(
@@ -286,6 +350,7 @@ class BookingDetailScreen extends ConsumerWidget {
       await _act(context, ref, 'setUserBlocked', <String, dynamic>{
         'targetUid': targetUid,
         'blocked': true,
+        'bookingId': bookingId,
       });
     }
   }
@@ -318,7 +383,10 @@ class BookingDetailScreen extends ConsumerWidget {
       ),
       body: bookingAsync.when(
         loading: () => const LoadingView(),
-        error: (error, stack) => ErrorView(message: friendlyError(error)),
+        error: (error, stack) => ErrorView(
+          message: friendlyError(error),
+          onRetry: () => ref.invalidate(bookingProvider(bookingId)),
+        ),
         data: (booking) {
           if (booking == null) {
             return const EmptyView(
@@ -357,11 +425,11 @@ class BookingDetailScreen extends ConsumerWidget {
                     children: [
                       _DetailRow(
                         icon: Icons.calendar_today,
-                        label: booking.scheduleDateKey,
+                        label: formatDateKey(booking.scheduleDateKey),
                       ),
                       _DetailRow(
                         icon: Icons.schedule,
-                        label: _windowLabel(booking.timeWindow),
+                        label: formatTimeWindow(booking.timeWindow),
                       ),
                       _DetailRow(
                         icon: Icons.location_on_outlined,
@@ -370,7 +438,7 @@ class BookingDetailScreen extends ConsumerWidget {
                       _DetailRow(
                         icon: Icons.payments_outlined,
                         label:
-                            '৳${NumberFormat.decimalPattern().format(booking.priceBdt)} • ${booking.paymentStatus.name}',
+                            '${formatBdt(booking.priceBdt)} • ${formatPaymentStatus(booking.paymentStatus)}',
                       ),
                     ],
                   ),
@@ -601,7 +669,9 @@ class _ContactCard extends ConsumerWidget {
         if (context.mounted) {
           showMessage(
             context,
-            'Calls are unavailable because one participant blocked the other.',
+            response['status'] == 'blocked'
+                ? 'Calls are unavailable because one participant blocked the other.'
+                : 'The other participant is not currently available for calls.',
             error: true,
           );
         }
@@ -624,6 +694,14 @@ class _ContactCard extends ConsumerWidget {
             .read(marketplaceRepositoryProvider)
             .watchBookingContact(bookingId),
         builder: (context, snapshot) {
+          if (snapshot.hasError) {
+            return Card(
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Text(friendlyError(snapshot.error!)),
+              ),
+            );
+          }
           if (!snapshot.hasData) {
             return const Card(
               child: Padding(
@@ -695,6 +773,8 @@ class ChatScreen extends ConsumerStatefulWidget {
 class _ChatScreenState extends ConsumerState<ChatScreen> {
   final _message = TextEditingController();
   bool _sending = false;
+  int _messageLimit = 50;
+  final _reporting = <String>{};
 
   @override
   void dispose() {
@@ -720,24 +800,82 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   }
 
   Future<void> _report(ChatMessage message) async {
+    if (_reporting.contains(message.id)) return;
+    var reason = 'objectionable_content';
+    final details = TextEditingController();
     final confirmed = await showDialog<bool>(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Report message?'),
-        content: Text('“${message.text}”'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('Back'),
+      builder: (context) => StatefulBuilder(
+        builder: (context, setState) => AlertDialog(
+          title: const Text('Report message'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text(
+                  '“${message.text}”',
+                  maxLines: 3,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                const SizedBox(height: 12),
+                DropdownButtonFormField<String>(
+                  initialValue: reason,
+                  decoration: const InputDecoration(labelText: 'Reason'),
+                  items: const [
+                    DropdownMenuItem(
+                      value: 'objectionable_content',
+                      child: Text('Objectionable content'),
+                    ),
+                    DropdownMenuItem(
+                      value: 'abusive_content',
+                      child: Text('Abusive content'),
+                    ),
+                    DropdownMenuItem(
+                      value: 'harassment',
+                      child: Text('Harassment'),
+                    ),
+                    DropdownMenuItem(value: 'spam', child: Text('Spam')),
+                    DropdownMenuItem(value: 'fraud', child: Text('Fraud')),
+                    DropdownMenuItem(value: 'other', child: Text('Other')),
+                  ],
+                  onChanged: (value) =>
+                      setState(() => reason = value ?? reason),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: details,
+                  maxLength: 1000,
+                  maxLines: 4,
+                  onChanged: (_) => setState(() {}),
+                  decoration: InputDecoration(
+                    labelText: reason == 'other'
+                        ? 'Details (required)'
+                        : 'Details (optional)',
+                  ),
+                ),
+              ],
+            ),
           ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('Report'),
-          ),
-        ],
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Back'),
+            ),
+            FilledButton(
+              onPressed: reason == 'other' && details.text.trim().length < 3
+                  ? null
+                  : () => Navigator.pop(context, true),
+              child: const Text('Submit report'),
+            ),
+          ],
+        ),
       ),
     );
-    if (confirmed != true) return;
+    final reportDetails = details.text.trim();
+    details.dispose();
+    if (confirmed != true || !mounted) return;
+    setState(() => _reporting.add(message.id));
     try {
       await ref
           .read(marketplaceRepositoryProvider)
@@ -745,12 +883,14 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
             'bookingId': widget.bookingId,
             'targetType': ReportTarget.message.name,
             'targetId': message.id,
-            'reason': 'objectionable_content',
-            'details': '',
+            'reason': reason,
+            'details': reportDetails,
           });
       if (mounted) showMessage(context, 'Message reported for review.');
     } catch (error) {
       if (mounted) showMessage(context, friendlyError(error), error: true);
+    } finally {
+      if (mounted) setState(() => _reporting.remove(message.id));
     }
   }
 
@@ -764,22 +904,32 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       body: Column(
         children: [
           if (!canSend)
-            MaterialBanner(
-              content: const Text(
-                'This booking is closed. Chat history is read-only.',
+            const SafeArea(
+              bottom: false,
+              child: Padding(
+                padding: EdgeInsets.fromLTRB(12, 8, 12, 0),
+                child: Card(
+                  child: Padding(
+                    padding: EdgeInsets.all(12),
+                    child: Text(
+                      'This booking is closed. Chat history is read-only.',
+                      textAlign: TextAlign.center,
+                    ),
+                  ),
+                ),
               ),
-              actions: [
-                TextButton(onPressed: () {}, child: const SizedBox.shrink()),
-              ],
             ),
           Expanded(
             child: StreamBuilder<List<ChatMessage>>(
               stream: ref
                   .read(marketplaceRepositoryProvider)
-                  .watchMessages(widget.bookingId),
+                  .watchMessages(widget.bookingId, limit: _messageLimit),
               builder: (context, snapshot) {
                 if (snapshot.hasError) {
-                  return ErrorView(message: friendlyError(snapshot.error!));
+                  return ErrorView(
+                    message: friendlyError(snapshot.error!),
+                    onRetry: () => setState(() {}),
+                  );
                 }
                 if (!snapshot.hasData) return const LoadingView();
                 if (snapshot.data!.isEmpty) {
@@ -791,45 +941,67 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                 }
                 return ListView.builder(
                   padding: const EdgeInsets.all(14),
-                  itemCount: snapshot.data!.length,
+                  itemCount:
+                      snapshot.data!.length +
+                      (snapshot.data!.length >= _messageLimit ? 1 : 0),
                   itemBuilder: (context, index) {
-                    final item = snapshot.data![index];
+                    if (index == 0 && snapshot.data!.length >= _messageLimit) {
+                      return Center(
+                        child: TextButton.icon(
+                          onPressed: () => setState(() => _messageLimit += 50),
+                          icon: const Icon(Icons.expand_less),
+                          label: const Text('Load older messages'),
+                        ),
+                      );
+                    }
+                    final messageIndex = snapshot.data!.length >= _messageLimit
+                        ? index - 1
+                        : index;
+                    final item = snapshot.data![messageIndex];
                     final own = item.senderId == uid;
                     return Align(
                       alignment: own
                           ? Alignment.centerRight
                           : Alignment.centerLeft,
-                      child: GestureDetector(
+                      child: Semantics(
+                        label:
+                            '${own ? 'Your message' : 'Message from the other participant'}: ${item.text}',
+                        hint: own ? null : 'Long press to report this message',
                         onLongPress: own ? null : () => _report(item),
-                        child: Container(
-                          constraints: const BoxConstraints(maxWidth: 320),
-                          margin: const EdgeInsets.only(bottom: 8),
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 14,
-                            vertical: 10,
-                          ),
-                          decoration: BoxDecoration(
-                            color: own
-                                ? Theme.of(context).colorScheme.primaryContainer
-                                : Theme.of(
-                                    context,
-                                  ).colorScheme.surfaceContainerHighest,
-                            borderRadius: BorderRadius.circular(16),
-                          ),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.end,
-                            children: [
-                              Text(item.text),
-                              const SizedBox(height: 3),
-                              Text(
-                                item.createdAt == null
-                                    ? 'Sending…'
-                                    : DateFormat.jm().format(
-                                        item.createdAt!.toLocal(),
-                                      ),
-                                style: Theme.of(context).textTheme.labelSmall,
-                              ),
-                            ],
+                        child: GestureDetector(
+                          onLongPress: own ? null : () => _report(item),
+                          child: Container(
+                            constraints: const BoxConstraints(maxWidth: 320),
+                            margin: const EdgeInsets.only(bottom: 8),
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 14,
+                              vertical: 10,
+                            ),
+                            decoration: BoxDecoration(
+                              color: own
+                                  ? Theme.of(
+                                      context,
+                                    ).colorScheme.primaryContainer
+                                  : Theme.of(
+                                      context,
+                                    ).colorScheme.surfaceContainerHighest,
+                              borderRadius: BorderRadius.circular(16),
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.end,
+                              children: [
+                                Text(item.text),
+                                const SizedBox(height: 3),
+                                Text(
+                                  item.createdAt == null
+                                      ? 'Sending…'
+                                      : DateFormat.jm().format(
+                                          item.createdAt!.toLocal(),
+                                        ),
+                                  style: Theme.of(context).textTheme.labelSmall,
+                                ),
+                              ],
+                            ),
                           ),
                         ),
                       ),
@@ -872,12 +1044,6 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     );
   }
 }
-
-String _windowLabel(TimeWindow window) => switch (window) {
-  TimeWindow.morning => 'Morning • 08:00–12:00',
-  TimeWindow.afternoon => 'Afternoon • 12:00–16:00',
-  TimeWindow.evening => 'Evening • 16:00–20:00',
-};
 
 String _eventLabel(String type) => switch (type) {
   'inProgress' => 'Work started',

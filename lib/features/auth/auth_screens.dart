@@ -89,18 +89,27 @@ class AccountRestrictedScreen extends ConsumerWidget {
                 const SizedBox(height: 18),
                 Text(
                   deletionPending
-                      ? 'Account deletion is processing'
+                      ? 'Account deletion requested'
                       : 'Account suspended',
                   style: Theme.of(context).textTheme.headlineSmall,
                   textAlign: TextAlign.center,
                 ),
                 const SizedBox(height: 10),
-                Text(
-                  deletionPending
-                      ? 'Your account is no longer available. Sign out to return to the login screen.'
-                      : 'Marketplace actions are disabled. Contact fixmatebd.support@gmail.com if you believe this is a mistake.',
-                  textAlign: TextAlign.center,
-                ),
+                if (deletionPending)
+                  StreamBuilder<DeletionRequest?>(
+                    stream: ref
+                        .read(marketplaceRepositoryProvider)
+                        .watchDeletionRequest(profile.id),
+                    builder: (context, snapshot) => Text(
+                      _deletionStatusMessage(snapshot.data?.status),
+                      textAlign: TextAlign.center,
+                    ),
+                  )
+                else
+                  const Text(
+                    'Marketplace actions are disabled. Contact fixmatebd.support@gmail.com if you believe this is a mistake.',
+                    textAlign: TextAlign.center,
+                  ),
                 const SizedBox(height: 22),
                 FilledButton.icon(
                   onPressed: () async {
@@ -117,6 +126,19 @@ class AccountRestrictedScreen extends ConsumerWidget {
     );
   }
 }
+
+String _deletionStatusMessage(
+  DeletionRequestStatus? status,
+) => switch (status) {
+  DeletionRequestStatus.cleanupInProgress =>
+    'Administrative cleanup is in progress. Marketplace access remains disabled.',
+  DeletionRequestStatus.cleanupFailed =>
+    'Cleanup needs administrator attention. Contact FixMate support from your registered email.',
+  DeletionRequestStatus.completed =>
+    'Administrative cleanup is complete. Sign out to leave this account.',
+  _ =>
+    'Your request is queued for administrator review. This does not mean cleanup is complete. Contact support if you need an update.',
+};
 
 class LoginScreen extends ConsumerStatefulWidget {
   const LoginScreen({super.key});
