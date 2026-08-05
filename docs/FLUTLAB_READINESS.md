@@ -52,19 +52,20 @@ Completed in the repository:
    Gradle plugins.
 4. Added runtime project/app identity validation and retained the safe failure
    screen.
+5. Deployed and verified the reviewed Firestore Rules, seeded exactly the six
+   reviewed category documents, and confirmed all 11 composite indexes are
+   Enabled/`READY`. App Check enforcement remains disabled.
 
 The two client configuration files are intentionally included in the
 repository so GitHub Actions and a clean FlutLab import receive identical
 Android configuration. They contain non-secret client identifiers. Never use
 or commit an Admin service-account JSON file in their place.
 
-Remaining manual/deployment work:
+Remaining manual work:
 
 1. Confirm Email/Password Authentication is enabled in Firebase Console.
-2. The publisher reports Firestore is in `asia-south1`; with separate explicit
-   authorization, deploy only
-   `firestore.rules` and `firestore.indexes.json`, then seed the six category
-   documents using the local tooling under `functions/`.
+2. Verify customer and provider Authentication/Firestore workflows on a
+   physical Android device without writing uncontrolled production test data.
 3. Register App Check for the Android app. Keep enforcement off during initial
    internal testing, never commit a debug token, and enable enforcement only
    after genuine device traffic is verified.
@@ -91,7 +92,8 @@ Remaining manual/deployment work:
 - Firebase Android client configuration is complete; device connectivity,
   Authentication, App Check, and Crashlytics delivery are not yet manually
   verified.
-- Firestore Rules/indexes and seed data are coded but not deployed.
+- Firestore Rules, all 11 indexes, and the six reviewed category documents are
+  deployed; their customer/provider behavior still requires device verification.
 - GitHub Pages legal files are coded but not published or legally reviewed.
 - Release builds fail closed when private upload signing is absent or
   incomplete; they never fall back to the debug key. Supply a private upload
