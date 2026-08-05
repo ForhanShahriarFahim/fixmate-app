@@ -1,9 +1,6 @@
 name: Deploy legal pages
 
 on:
-  push:
-    branches: [main]
-    paths: ["docs/**"]
   workflow_dispatch:
 
 permissions:
@@ -29,4 +26,3 @@ jobs:
           path: docs
       - id: deployment
         uses: actions/deploy-pages@v4
-
