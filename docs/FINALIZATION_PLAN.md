@@ -21,7 +21,7 @@ This document is the living implementation record for the Android internal-testi
 - Working branch: `codex/finalize-fixmate`, created from the updated `main` with no user changes discarded.
 - Remote: `origin` → `https://github.com/ForhanShahriarFahim/fixmate-app.git`.
 - No applicable `AGENTS.md` files exist.
-- Through the Stage 7A review checkpoint, no merge, Firebase deployment, Pages publication, tag, release, Rules/index update, seed write, App Check enforcement change, or Firebase data mutation occurred. The separately authorized GitHub publication step may push only `codex/finalize-fixmate` and open an unmerged pull request.
+- Through the Stage 7A review checkpoint, no merge, Firebase deployment, Pages publication, tag, release, Rules/index update, seed write, App Check enforcement change, or Firebase data mutation occurred. Stage 6B subsequently deployed only the reviewed Firestore Rules, 11 composite indexes, and six category documents to `fixmate-ce36d`; no other Firebase product was changed.
 - Android Gradle declares both `namespace` and `applicationId` as `com.fixmatebd.app`; `MainActivity.kt` uses the same package and the manifest label is `FixMate`.
 - The verified builder is Flutter 3.41.6 / Dart 3.11.4. Android now matches that Flutter template: min SDK 24, compile SDK 36, AGP 8.11.1, Gradle 8.14, and Kotlin 2.2.20.
 - The only Flutter asset is valid JSON at `assets/data/bangladesh_locations.json`; no custom fonts or local/Git package dependencies are declared.
@@ -158,6 +158,67 @@ the local emulator suite, then perform customer/provider positive and malicious
 device tests. Firebase CLI cannot retrieve deployed Rules text, so the Console
 Rules version must be compared with the reviewed file and deployment output.
 
+## Stage 6B Firestore deployment result
+
+- Deployment completed on 5 August 2026 at approximately 18:50 Asia/Dhaka,
+  after re-verifying repository `ForhanShahriarFahim/fixmate-app`, branch
+  `codex/finalize-fixmate`, Firebase project `fixmate-ce36d`, Android package
+  `com.fixmatebd.app`, and unchanged Stage 6A artifact hashes.
+- The read-only pre-deployment check found a different live Rules release, zero
+  composite indexes, and an empty `categories` collection. The reviewed
+  deployment therefore had not already been completed.
+- The following mutation commands ran from the repository root, with an
+  authenticated-project check immediately before each one:
+
+  ```console
+  functions\node_modules\.bin\firebase.cmd deploy --project fixmate-ce36d --only firestore:rules --non-interactive
+  functions\node_modules\.bin\firebase.cmd deploy --project fixmate-ce36d --only firestore:indexes --non-interactive
+  npm --prefix functions run seed -- --project fixmate-ce36d
+  ```
+
+- The Rules command compiled and released only `firestore.rules` to
+  `cloud.firestore`. Post-deployment Rules API readback matched the reviewed
+  normalized source exactly (local and live SHA-256
+  `6063EE1EBFF5FED0A2C37F6334506D600545A280EA5575CFF20D5FE8DAFA722B`).
+- The indexes command submitted the 11 definitions in
+  `firestore.indexes.json`. Initial API readback found exactly 11 matching
+  definitions in `CREATING`, with no missing or unexpected definitions. The
+  publisher then confirmed all 11 as Enabled in Firebase Console, and the Stage
+  6B closure readback independently verified all 11 as `READY` with zero
+  non-ready, missing, or unexpected definitions:
+  categories `(isActive, order)`; services `(status, categoryId,
+  districtCode)`, `(providerId, updatedAt desc)`, `(providerId, status)`,
+  `(status, districtCode)`, and `(status, categoryId)`; bookings `(customerId,
+  createdAt desc)`, `(providerId, createdAt desc)`, `(customerId, status)`, and
+  `(providerId, status)`; reviews `(providerId, createdAt desc)`.
+- The idempotent merge seed reported six writes. Firestore API readback found
+  exactly `ac-repair`, `appliance-repair`, `cleaning`, `electrical`, `painting`,
+  and `plumbing`; all six reviewed field sets and server timestamps matched.
+  The collection contained no extra documents before or after the seed.
+- Rules and index deployment do not write application documents. The seed has
+  fixed paths and a single merge batch containing only the six paths above;
+  pre/post category counts and the unchanged empty unrelated-category digest
+  provide scope evidence. Hosting, Storage, Functions, Authentication
+  configuration, App Check enforcement, Messaging, Remote Config, billing, and
+  unrelated Firestore documents were not targeted.
+- Post-deployment and closure checks used read-only Firebase CLI and Google APIs.
+  Closure readback reconfirmed the expected Rules hash, all six exact category
+  documents and values, all 11 `READY` indexes, and two explicitly configured
+  App Check services with neither baseline nor replay enforcement enabled. The
+  temporary operator application-default credential used during deployment was
+  revoked; no service-account credential was requested, created, or used.
+- Stage 6B is fully closed. Remaining work is outside this deployment stage:
+  verify email/password Authentication and complete customer/provider Firestore
+  workflows on a physical Android device; exercise App Check monitoring without
+  enabling enforcement; import/build/run in FlutLab; verify Crashlytics delivery;
+  and complete accessibility, signing, legal, Play declaration, and internal-test
+  checks.
+- Recovery requires explicit approval: use the Firestore Rules release history
+  to restore the recorded previous release, delete/recreate only the affected
+  composite indexes from a reviewed manifest, and delete the six seeded
+  category documents only because the verified pre-deployment collection was
+  empty. Never weaken Rules or delete unrelated data as a rollback shortcut.
+
 ## Stage 7A review result
 
 - PR-style review found a live client/Rules mismatch: booking creation and
@@ -206,7 +267,9 @@ The first APK attempts exposed environmental and repository compatibility issues
 - Keep App Check in monitoring for internal testing. Never commit a debug token. Enforce only after valid device traffic is confirmed.
 - FlutLab target is Flutter 3.41.6 / Dart 3.11.4; repository SDK constraints, lockfile, Android toolchain, and CI are aligned. Import the repository root and build a debug APK first. See `docs/FLUTLAB_READINESS.md`.
 - Crashlytics native Gradle configuration is present and the debug APK build executes its generated tasks; delivery must still be verified with a deliberate non-fatal event on a test device.
-- Firestore Rules/indexes are coded locally only until an explicitly authorized deployment occurs.
+- The reviewed Firestore Rules and all 11 composite indexes were deployed to
+  `fixmate-ce36d` in Stage 6B. Console confirmation and authenticated readback
+  now show all 11 indexes Enabled/`READY`.
 - GitHub Pages publication, support-email reservation, privacy/terms legal review, Play Data Safety, account-deletion URL, UGC/content rating, and physical-device accessibility checks remain manual.
 - Release signing requires a private upload keystore and secure local/FlutLab or CI secret injection. No signing material belongs in this repository.
 
@@ -217,8 +280,9 @@ The first APK attempts exposed environmental and repository compatibility issues
 - **Stage 3 — beta interface:** coded and automatically verified. Public provider, blocked-user, report, activity, bounded loading, common failure states, and workflow controls are implemented; analysis/tests and the debug APK pass. Physical accessibility/responsiveness remains manual.
 - **Stage 5 — Firebase Android client:** coded and automatically verified. Project/package identities, generated options, Gradle plugins, initialization guards, tests, and the debug APK pass. Rules/index deployment, category seeding, App Check registration/enforcement state, Crashlytics delivery, and physical-device authentication remain separate manual/deployment states.
 - **Stage 6A — Firestore pre-deployment validation:** complete locally. Rules, queries/indexes, the exact seed manifest, commands, resources, recovery, and post-deployment checks are recorded. Nothing was deployed or seeded.
+- **Stage 6B — Firestore deployment:** fully closed. Rules and all six categories match the review, all 11 matching indexes are Enabled/`READY`, App Check enforcement remains disabled, and no unrelated Firebase resource was deployed. Device behavior remains a later manual milestone.
 - **Stage 7A — GitHub review:** complete locally. Diff, workflow permissions, Firebase client-file strategy, documentation, Windows Gradle failure propagation, release-signing denial, and redacted repository/history secret scans were reviewed before intentional commits.
-- **Internal testing:** blocked until Authentication/Firestore device connectivity, Rules/index deployment, categories, App Check monitoring, legal pages, signing, Play declarations, and physical-device checks are manually verified.
+- **Internal testing:** blocked until Authentication/Firestore device connectivity, App Check monitoring, FlutLab behavior, legal pages, signing, Play declarations, and physical-device checks are manually verified.
 
 ## Progress log
 
@@ -233,3 +297,4 @@ The first APK attempts exposed environmental and repository compatibility issues
 - 2026-08-05: Stage 5 verified the supplied client file against `fixmate-ce36d` and `com.fixmatebd.app`, reauthenticated the official Firebase/FlutterFire CLIs interactively, matched the existing Android registration, generated the actual options path, added Google Services and Crashlytics Gradle plugins, removed unused platform placeholders, and added a runtime identity test. All 15 Flutter tests, 16 Rules tests, analysis, formatting, and the Firebase-connected debug APK passed. No Rules/index deployment, data seeding, push, merge, App Check enforcement, or service-account credential was used.
 - 2026-08-05: Stage 6A mapped every application compound query to 11 indexes, extracted and tested the exact six-document merge-safe category manifest, corrected the seed command's old project ID, and expanded Rules coverage to 24 emulator cases. No Rules/index/data operation ran against `fixmate-ce36d`.
 - 2026-08-05: Stage 7A found and fixed forbidden cross-user private reads that would have broken real booking and communication flows, allowed cancellation when the other participant is suspended, denied messages to suspended recipients, made release signing fail closed, and repaired Windows Gradle exit propagation. Final Flutter tests (15), Rules tests (24), TypeScript checks, secret/history scan, whitespace review, and debug APK build passed.
+- 2026-08-05: Stage 6B deployed only the reviewed Firestore Rules, 11 composite indexes, and idempotent six-category seed to `fixmate-ce36d`. Closure readback matched the Rules hash and six category documents, verified all 11 indexes as `READY`, and confirmed App Check enforcement disabled. No other Firebase product or unrelated document was deployed or seeded.
