@@ -29,6 +29,13 @@ enum ReportStatus { open, reviewing, resolved, dismissed }
 
 enum NotificationType { booking, message, review, moderation, account }
 
+enum DeletionRequestStatus {
+  requested,
+  cleanupInProgress,
+  cleanupFailed,
+  completed,
+}
+
 T enumFromName<T extends Enum>(List<T> values, Object? raw, T fallback) {
   final wire = raw?.toString();
   for (final value in values) {
@@ -102,9 +109,7 @@ class ProviderProfile {
     required this.serviceAreaLabels,
     required this.serviceAreaKeys,
     required this.approvalStatus,
-    required this.ratingAverage,
-    required this.reviewCount,
-    required this.completedBookings,
+    required this.marketplaceVisible,
   });
 
   factory ProviderProfile.fromDocument(
@@ -130,9 +135,7 @@ class ProviderProfile {
         data['approvalStatus'],
         ProviderApprovalStatus.pending,
       ),
-      ratingAverage: (data['ratingAverage'] as num?)?.toDouble() ?? 0,
-      reviewCount: (data['reviewCount'] as num?)?.toInt() ?? 0,
-      completedBookings: (data['completedBookings'] as num?)?.toInt() ?? 0,
+      marketplaceVisible: data['marketplaceVisible'] as bool? ?? false,
     );
   }
 
@@ -146,9 +149,10 @@ class ProviderProfile {
   final List<String> serviceAreaLabels;
   final List<String> serviceAreaKeys;
   final ProviderApprovalStatus approvalStatus;
-  final double ratingAverage;
-  final int reviewCount;
-  final int completedBookings;
+  final bool marketplaceVisible;
+
+  bool get isBookable =>
+      approvalStatus == ProviderApprovalStatus.approved && marketplaceVisible;
 }
 
 class ServiceCategory {
@@ -191,8 +195,6 @@ class ServiceListing {
     required this.areaLabels,
     required this.areaKeys,
     required this.status,
-    required this.providerRating,
-    required this.reviewCount,
   });
 
   factory ServiceListing.fromDocument(
@@ -220,8 +222,6 @@ class ServiceListing {
         data['status'],
         ServiceStatus.active,
       ),
-      providerRating: (data['providerRating'] as num?)?.toDouble() ?? 0,
-      reviewCount: (data['reviewCount'] as num?)?.toInt() ?? 0,
     );
   }
 
@@ -237,8 +237,6 @@ class ServiceListing {
   final List<String> areaLabels;
   final List<String> areaKeys;
   final ServiceStatus status;
-  final double providerRating;
-  final int reviewCount;
 }
 
 class Booking {
@@ -496,4 +494,85 @@ class ServiceReview {
   final int rating;
   final String comment;
   final DateTime? createdAt;
+}
+
+class ReviewSummary {
+  const ReviewSummary({required this.count, required this.average});
+
+  final int count;
+  final double? average;
+
+  bool get hasReviews => count > 0 && average != null;
+}
+
+class ProviderDashboardStats {
+  const ProviderDashboardStats({
+    required this.pending,
+    required this.active,
+    required this.completed,
+  });
+
+  final int pending;
+  final int active;
+  final int completed;
+}
+
+class BlockedUser {
+  const BlockedUser({
+    required this.uid,
+    required this.displayName,
+    required this.bookingId,
+    this.createdAt,
+  });
+
+  factory BlockedUser.fromDocument(
+    DocumentSnapshot<Map<String, dynamic>> document,
+  ) {
+    final data = document.data() ?? <String, dynamic>{};
+    return BlockedUser(
+      uid: data['blockedUid'] as String? ?? document.id,
+      displayName:
+          data['displayNameSnapshot'] as String? ?? 'Blocked FixMate user',
+      bookingId: data['bookingId'] as String? ?? '',
+      createdAt: dateFrom(data['createdAt']),
+    );
+  }
+
+  final String uid;
+  final String displayName;
+  final String bookingId;
+  final DateTime? createdAt;
+}
+
+class DeletionRequest {
+  const DeletionRequest({
+    required this.uid,
+    required this.status,
+    required this.failureMessage,
+    this.requestedAt,
+    this.updatedAt,
+  });
+
+  factory DeletionRequest.fromDocument(
+    DocumentSnapshot<Map<String, dynamic>> document,
+  ) {
+    final data = document.data() ?? <String, dynamic>{};
+    return DeletionRequest(
+      uid: document.id,
+      status: enumFromName(
+        DeletionRequestStatus.values,
+        data['status'],
+        DeletionRequestStatus.requested,
+      ),
+      failureMessage: data['failureMessage'] as String? ?? '',
+      requestedAt: dateFrom(data['requestedAt']),
+      updatedAt: dateFrom(data['updatedAt']),
+    );
+  }
+
+  final String uid;
+  final DeletionRequestStatus status;
+  final String failureMessage;
+  final DateTime? requestedAt;
+  final DateTime? updatedAt;
 }

@@ -14,12 +14,21 @@ service cloud.firestore {
         ownUser().data.isAdultConfirmed == true &&
         ownUser().data.termsVersion == '1.0';
     }
-    function deletingUser() {
-      return signedIn() && ownUser().data.status == 'deletionPending';
+    function recentlyAuthenticated() {
+      return signedIn() && request.auth.token.auth_time is int &&
+        request.time - timestamp.value(request.auth.token.auth_time * 1000) < duration.value(10, 'm');
+    }
+    function providerProfile(uid) {
+      return get(/databases/$(database)/documents/provider_profiles/$(uid));
+    }
+    function marketplaceEligible(uid) {
+      return providerProfile(uid).data.approvalStatus == 'approved' &&
+        providerProfile(uid).data.marketplaceVisible == true &&
+        userDoc(uid).data.status == 'active';
     }
     function approvedProvider() {
       return activeUser() && ownUser().data.role == 'provider' &&
-        get(/databases/$(database)/documents/provider_profiles/$(request.auth.uid)).data.approvalStatus == 'approved';
+        marketplaceEligible(request.auth.uid);
     }
     function bookingDoc(bookingId) {
       return get(/databases/$(database)/documents/bookings/$(bookingId));
@@ -65,7 +74,10 @@ service cloud.firestore {
         data.serviceAreaLabels.size() >= 1 && data.serviceAreaLabels.size() <= 10 &&
         data.serviceAreaKeys.size() == data.serviceAreaLabels.size() &&
         data.approvalStatus in ['pending', 'approved', 'rejected'] &&
-        data.ratingAverage == 0 && data.reviewCount == 0 && data.completedBookings == 0;
+        data.marketplaceVisible is bool &&
+        (!data.keys().hasAny(['ratingAverage', 'reviewCount', 'completedBookings']) ||
+          (data.keys().hasAll(['ratingAverage', 'reviewCount', 'completedBookings']) &&
+           data.ratingAverage == 0 && data.reviewCount == 0 && data.completedBookings == 0));
     }
     function validService(data) {
       return data.providerId is string && data.providerName is string &&
@@ -82,7 +94,15 @@ service cloud.firestore {
         data.areaKeys.size() == data.areaLabels.size() &&
         data.searchTokens is list && data.searchTokens.size() <= 20 &&
         data.status in ['active', 'archived'] &&
-        data.providerRating == 0 && data.reviewCount == 0;
+        (!data.keys().hasAny(['providerRating', 'reviewCount']) ||
+          (data.keys().hasAll(['providerRating', 'reviewCount']) &&
+           data.providerRating == 0 && data.reviewCount == 0));
+    }
+    function serviceMatchesApprovedCoverage(data) {
+      return data.providerName == providerProfile(request.auth.uid).data.publicName &&
+        data.districtCode == providerProfile(request.auth.uid).data.districtCode &&
+        data.areaLabels == providerProfile(request.auth.uid).data.serviceAreaLabels &&
+        data.areaKeys == providerProfile(request.auth.uid).data.serviceAreaKeys;
     }
     function validBookingShape(data) {
       return data.customerId is string && data.providerId is string && data.customerId != data.providerId &&
@@ -98,19 +118,16 @@ service cloud.firestore {
         (data.lastMessagePreview == null ||
           (data.lastMessagePreview is string && data.lastMessagePreview.size() <= 120));
     }
-    function immutableBookingFields() {
-      return request.resource.data.customerId == resource.data.customerId &&
-        request.resource.data.providerId == resource.data.providerId &&
-        request.resource.data.serviceId == resource.data.serviceId &&
-        request.resource.data.scheduleDateKey == resource.data.scheduleDateKey &&
-        request.resource.data.scheduledStart == resource.data.scheduledStart &&
-        request.resource.data.timeWindow == resource.data.timeWindow &&
-        request.resource.data.divisionCode == resource.data.divisionCode &&
-        request.resource.data.districtCode == resource.data.districtCode &&
-        request.resource.data.areaLabel == resource.data.areaLabel &&
-        request.resource.data.areaKey == resource.data.areaKey &&
-        request.resource.data.priceBdt == resource.data.priceBdt &&
-        request.resource.data.createdAt == resource.data.createdAt;
+    function matchesBookableService(data) {
+      let serviceData = get(/databases/$(database)/documents/services/$(data.serviceId)).data;
+      let profile = get(/databases/$(database)/documents/provider_profiles/$(data.providerId)).data;
+      let provider = get(/databases/$(database)/documents/users/$(data.providerId)).data;
+      return serviceData.status == 'active' && serviceData.providerId == data.providerId &&
+        serviceData.providerName == data.providerName && serviceData.title == data.serviceTitle &&
+        serviceData.priceBdt == data.priceBdt && serviceData.districtCode == data.districtCode &&
+        data.areaLabel in serviceData.areaLabels && data.areaKey in serviceData.areaKeys &&
+        profile.divisionCode == data.divisionCode && profile.approvalStatus == 'approved' &&
+        profile.marketplaceVisible == true && provider.status == 'active';
     }
     function eventMatches(bookingId, status) {
       return request.resource.data.lastEventId is string &&
@@ -131,7 +148,7 @@ service cloud.firestore {
         value.actorId == request.auth.uid && value.createdAt == request.time;
     }
     function acceptedTransition(bookingId) {
-      return ownUser().data.role == 'provider' && resource.data.providerId == request.auth.uid &&
+      return approvedProvider() && resource.data.providerId == request.auth.uid &&
         resource.data.status == 'pending' && request.resource.data.status == 'accepted' &&
         request.resource.data.contactReleasedAt == request.time &&
         request.resource.data.updatedAt == request.time &&
@@ -143,7 +160,7 @@ service cloud.firestore {
         getAfter(/databases/$(database)/documents/bookings/$(bookingId)/private/contact).data.providerPhone == ownUser().data.phoneE164;
     }
     function rejectedTransition(bookingId) {
-      return ownUser().data.role == 'provider' && resource.data.providerId == request.auth.uid &&
+      return approvedProvider() && resource.data.providerId == request.auth.uid &&
         resource.data.status == 'pending' && request.resource.data.status == 'rejected' &&
         validRejection(request.resource.data.rejection) &&
         request.resource.data.updatedAt == request.time &&
@@ -152,7 +169,7 @@ service cloud.firestore {
         ]) && eventMatches(bookingId, 'rejected');
     }
     function providerTransition(bookingId, from, to) {
-      return ownUser().data.role == 'provider' && resource.data.providerId == request.auth.uid &&
+      return approvedProvider() && resource.data.providerId == request.auth.uid &&
         resource.data.status == from && request.resource.data.status == to &&
         request.resource.data.updatedAt == request.time &&
         request.resource.data.diff(resource.data).affectedKeys().hasOnly([
@@ -201,15 +218,27 @@ service cloud.firestore {
         existsAfter(/databases/$(database)/documents/bookings/$(bookingId)/messages/$(request.resource.data.lastMessageId)) &&
         getAfter(/databases/$(database)/documents/bookings/$(bookingId)/messages/$(request.resource.data.lastMessageId)).data.senderId == request.auth.uid;
     }
-    function validAnonymization() {
-      return deletingUser() && participant(resource.data) && request.resource.data.status == resource.data.status &&
-        request.resource.data.updatedAt == request.time &&
-        ((resource.data.customerId == request.auth.uid && request.resource.data.customerName == 'Deleted user' &&
-          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['customerName', 'updatedAt'])) ||
-         (resource.data.providerId == request.auth.uid && request.resource.data.providerName == 'Deleted provider' &&
-          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['providerName', 'updatedAt'])));
+    function authorizedBookingUpdate(bookingId) {
+      let from = resource.data.status;
+      let to = request.resource.data.status;
+      return from == to
+        ? validMessageMetadata(bookingId)
+        : to == 'cancelled'
+          ? cancelledTransition(bookingId)
+          : from == 'pending' && to == 'accepted'
+            ? acceptedTransition(bookingId)
+            : from == 'pending' && to == 'rejected'
+              ? rejectedTransition(bookingId)
+              : from == 'accepted' && to == 'inProgress'
+                ? providerTransition(bookingId, 'accepted', 'inProgress')
+                : from == 'inProgress' && to == 'completionRequested'
+                  ? providerTransition(bookingId, 'inProgress', 'completionRequested')
+                  : from == 'completionRequested' && to == 'completed'
+                    ? completedTransition(bookingId)
+                    : from == 'completionRequested' && to == 'disputed'
+                      ? disputedTransition(bookingId)
+                      : false;
     }
-
     match /users/{uid} {
       allow create: if isSelf(uid) &&
         request.resource.data.keys().hasOnly([
@@ -232,39 +261,41 @@ service cloud.firestore {
           ])) ||
         (resource.data.status == 'active' && request.resource.data.status == 'deletionPending' &&
           request.resource.data.updatedAt == request.time &&
-          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'updatedAt'])) ||
-        (resource.data.status == 'deletionPending' && request.resource.data.status == 'deletionPending' &&
-          request.resource.data.displayName == 'Deleted user' && request.resource.data.email == '' &&
-          request.resource.data.phoneE164 == '' && request.resource.data.photoPath == null &&
-          request.resource.data.role == resource.data.role && request.resource.data.createdAt == resource.data.createdAt &&
-          request.resource.data.updatedAt == request.time &&
-          request.resource.data.diff(resource.data).affectedKeys().hasOnly([
-            'displayName', 'email', 'phoneE164', 'photoPath', 'updatedAt'
-          ]))
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'updatedAt']) &&
+          getAfter(/databases/$(database)/documents/deletion_requests/$(uid)).data.uid == uid &&
+          getAfter(/databases/$(database)/documents/deletion_requests/$(uid)).data.status == 'requested')
       );
       allow delete: if false;
     }
 
     match /provider_profiles/{uid} {
-      allow read: if resource.data.approvalStatus == 'approved' || isSelf(uid);
+      // Profiles contain only deliberately public marketplace fields. Signed-in
+      // users may get a profile by uid so eligibility listeners survive a
+      // provider's re-review cycle; listing still requires an approved visible
+      // profile.
+      allow get: if signedIn();
+      allow list: if resource.data.approvalStatus == 'approved' &&
+        resource.data.marketplaceVisible == true;
       allow create: if isSelf(uid) && activeUser() && ownUser().data.role == 'provider' &&
         request.resource.data.keys().hasOnly([
           'providerId', 'publicName', 'avatarUrl', 'bio', 'experienceYears',
           'divisionCode', 'districtCode', 'serviceAreaLabels', 'serviceAreaKeys',
-          'approvalStatus', 'ratingAverage', 'reviewCount', 'completedBookings',
+          'approvalStatus', 'marketplaceVisible', 'ratingAverage', 'reviewCount', 'completedBookings',
           'createdAt', 'updatedAt'
         ]) && validProviderProfile(request.resource.data, uid) &&
-        request.resource.data.approvalStatus == 'pending' &&
+        request.resource.data.approvalStatus == 'pending' && request.resource.data.marketplaceVisible == false &&
         request.resource.data.createdAt == request.time && request.resource.data.updatedAt == request.time;
       allow update: if isSelf(uid) && activeUser() && validProviderProfile(request.resource.data, uid) &&
         request.resource.data.providerId == resource.data.providerId &&
-        request.resource.data.approvalStatus == resource.data.approvalStatus &&
+        request.resource.data.approvalStatus == 'pending' &&
+        request.resource.data.marketplaceVisible == false &&
         request.resource.data.updatedAt == request.time &&
         request.resource.data.diff(resource.data).affectedKeys().hasOnly([
           'publicName', 'bio', 'experienceYears', 'divisionCode', 'districtCode',
-          'serviceAreaLabels', 'serviceAreaKeys', 'updatedAt'
+          'serviceAreaLabels', 'serviceAreaKeys', 'approvalStatus',
+          'marketplaceVisible', 'updatedAt'
         ]);
-      allow delete: if isSelf(uid) && deletingUser();
+      allow delete: if false;
     }
 
     match /categories/{categoryId} {
@@ -280,19 +311,18 @@ service cloud.firestore {
           'providerId', 'providerName', 'categoryId', 'title', 'description',
           'priceBdt', 'coverImageUrl', 'districtCode', 'areaLabels', 'areaKeys',
           'searchTokens', 'status', 'providerRating', 'reviewCount', 'createdAt', 'updatedAt'
-        ]) && validService(request.resource.data) &&
+        ]) && validService(request.resource.data) && serviceMatchesApprovedCoverage(request.resource.data) &&
         request.resource.data.providerId == request.auth.uid &&
-        request.resource.data.providerName == get(/databases/$(database)/documents/provider_profiles/$(request.auth.uid)).data.publicName &&
         request.resource.data.createdAt == request.time && request.resource.data.updatedAt == request.time;
       allow update: if approvedProvider() && resource.data.providerId == request.auth.uid &&
-        validService(request.resource.data) && request.resource.data.providerId == resource.data.providerId &&
-        request.resource.data.providerName == get(/databases/$(database)/documents/provider_profiles/$(request.auth.uid)).data.publicName &&
+        validService(request.resource.data) && serviceMatchesApprovedCoverage(request.resource.data) &&
+        request.resource.data.providerId == resource.data.providerId &&
         request.resource.data.updatedAt == request.time &&
         request.resource.data.diff(resource.data).affectedKeys().hasOnly([
           'providerName', 'categoryId', 'title', 'description', 'priceBdt',
           'districtCode', 'areaLabels', 'areaKeys', 'searchTokens', 'status', 'updatedAt'
         ]);
-      allow delete: if deletingUser() && resource.data.providerId == request.auth.uid;
+      allow delete: if false;
     }
 
     match /bookings/{bookingId} {
@@ -315,27 +345,17 @@ service cloud.firestore {
         request.resource.data.lastMessageId == null && request.resource.data.lastMessageAt == null &&
         request.resource.data.lastMessageSenderId == null && request.resource.data.lastMessagePreview == null &&
         request.resource.data.createdAt == request.time && request.resource.data.updatedAt == request.time &&
-        get(/databases/$(database)/documents/services/$(request.resource.data.serviceId)).data.status == 'active' &&
-        request.resource.data.providerId == get(/databases/$(database)/documents/services/$(request.resource.data.serviceId)).data.providerId &&
-        request.resource.data.providerName == get(/databases/$(database)/documents/services/$(request.resource.data.serviceId)).data.providerName &&
-        request.resource.data.serviceTitle == get(/databases/$(database)/documents/services/$(request.resource.data.serviceId)).data.title &&
-        request.resource.data.priceBdt == get(/databases/$(database)/documents/services/$(request.resource.data.serviceId)).data.priceBdt &&
-        request.resource.data.districtCode == get(/databases/$(database)/documents/services/$(request.resource.data.serviceId)).data.districtCode &&
-        request.resource.data.areaKey in get(/databases/$(database)/documents/services/$(request.resource.data.serviceId)).data.areaKeys &&
-        get(/databases/$(database)/documents/provider_profiles/$(request.resource.data.providerId)).data.approvalStatus == 'approved' &&
-        get(/databases/$(database)/documents/users/$(request.resource.data.providerId)).data.status == 'active' &&
+        matchesBookableService(request.resource.data) &&
+        !exists(/databases/$(database)/documents/blocks/$(request.auth.uid)/users/$(request.resource.data.providerId)) &&
+        !exists(/databases/$(database)/documents/blocks/$(request.resource.data.providerId)/users/$(request.auth.uid)) &&
         existsAfter(/databases/$(database)/documents/bookings/$(bookingId)/events/$(request.resource.data.lastEventId)) &&
         getAfter(/databases/$(database)/documents/bookings/$(bookingId)/events/$(request.resource.data.lastEventId)).data.type == 'pending' &&
         getAfter(/databases/$(database)/documents/bookings/$(bookingId)/events/$(request.resource.data.lastEventId)).data.actorId == request.auth.uid &&
         getAfter(/databases/$(database)/documents/bookings/$(bookingId)/private/contact).data.customerPhone == ownUser().data.phoneE164;
-      allow update: if validBookingShape(request.resource.data) && immutableBookingFields() &&
-        ((activeUser() && (
-          acceptedTransition(bookingId) || rejectedTransition(bookingId) ||
-          providerTransition(bookingId, 'accepted', 'inProgress') ||
-          providerTransition(bookingId, 'inProgress', 'completionRequested') ||
-          completedTransition(bookingId) || disputedTransition(bookingId) ||
-          cancelledTransition(bookingId) || validMessageMetadata(bookingId)
-        )) || validAnonymization());
+      // Every transition below has its own strict affected-field allowlist;
+      // avoiding a full-document revalidation here keeps valid/invalid writes
+      // safely below Firestore's 1,000-expression evaluation ceiling.
+      allow update: if activeUser() && authorizedBookingUpdate(bookingId);
       allow delete: if false;
 
       match /private/{documentId} {
@@ -350,25 +370,21 @@ service cloud.firestore {
           request.resource.data.providerPhone == '' &&
           request.resource.data.address is string && request.resource.data.address.size() >= 5 && request.resource.data.address.size() <= 500 &&
           request.resource.data.landmark is string && request.resource.data.landmark.size() <= 200;
-        allow update: if documentId == 'contact' && (
-          (activeUser() && ownUser().data.role == 'provider' &&
+        allow update: if documentId == 'contact' &&
+          (approvedProvider() &&
             bookingDoc(bookingId).data.providerId == request.auth.uid &&
             bookingDoc(bookingId).data.status == 'pending' && bookingAfter(bookingId).data.status == 'accepted' &&
             request.resource.data.providerPhone == ownUser().data.phoneE164 &&
-            request.resource.data.diff(resource.data).affectedKeys().hasOnly(['providerPhone'])) ||
-          (deletingUser() && bookingParticipant(bookingId) &&
-            ((bookingDoc(bookingId).data.customerId == request.auth.uid &&
-              request.resource.data.customerPhone == '' && request.resource.data.address == '' && request.resource.data.landmark == '' &&
-              request.resource.data.diff(resource.data).affectedKeys().hasOnly(['customerPhone', 'address', 'landmark'])) ||
-             (bookingDoc(bookingId).data.providerId == request.auth.uid && request.resource.data.providerPhone == '' &&
-              request.resource.data.diff(resource.data).affectedKeys().hasOnly(['providerPhone']))))
-        );
+            request.resource.data.diff(resource.data).affectedKeys().hasOnly(['providerPhone']));
         allow delete: if false;
       }
 
       match /events/{eventId} {
         allow read: if bookingParticipant(bookingId);
         allow create: if activeUser() && participant(bookingAfter(bookingId).data) &&
+          (request.resource.data.type == 'cancelled' ||
+           userDoc(otherParticipant(bookingAfter(bookingId).data)).data.status == 'active') &&
+          (ownUser().data.role == 'customer' || approvedProvider()) &&
           bookingAfter(bookingId).data.lastEventId == eventId &&
           request.resource.data.keys().hasOnly(['type', 'actorId', 'createdAt']) &&
           request.resource.data.type == bookingAfter(bookingId).data.status &&
@@ -379,6 +395,7 @@ service cloud.firestore {
       match /messages/{messageId} {
         allow read: if bookingParticipant(bookingId);
         allow create: if activeUser() && participant(bookingAfter(bookingId).data) &&
+          userDoc(otherParticipant(bookingAfter(bookingId).data)).data.status == 'active' &&
           bookingAfter(bookingId).data.status in ['accepted', 'inProgress', 'completionRequested'] &&
           !exists(/databases/$(database)/documents/blocks/$(request.auth.uid)/users/$(otherParticipant(bookingAfter(bookingId).data))) &&
           !exists(/databases/$(database)/documents/blocks/$(otherParticipant(bookingAfter(bookingId).data))/users/$(request.auth.uid)) &&
@@ -389,7 +406,7 @@ service cloud.firestore {
           request.resource.data.text is string && request.resource.data.text.size() > 0 && request.resource.data.text.size() <= 1000 &&
           request.resource.data.createdAt == request.time && request.resource.data.readAt == null;
         allow update: if false;
-        allow delete: if deletingUser() && resource.data.senderId == request.auth.uid;
+        allow delete: if false;
       }
     }
 
@@ -431,14 +448,21 @@ service cloud.firestore {
         request.resource.data.comment is string && request.resource.data.comment.size() <= 500 &&
         request.resource.data.createdAt == request.time;
       allow update: if false;
-      allow delete: if deletingUser() && resource.data.customerId == request.auth.uid;
+      allow delete: if false;
     }
 
     match /blocks/{uid}/users/{blockedUid} {
       allow read: if isSelf(uid) || (signedIn() && blockedUid == request.auth.uid);
-      allow create, update: if activeUser() && isSelf(uid) && blockedUid != uid &&
-        request.resource.data.keys().hasOnly(['blockedUid', 'createdAt']) &&
-        request.resource.data.blockedUid == blockedUid && request.resource.data.createdAt == request.time;
+      allow create: if activeUser() && isSelf(uid) && blockedUid != uid &&
+        request.resource.data.keys().hasOnly(['blockedUid', 'displayNameSnapshot', 'bookingId', 'createdAt']) &&
+        request.resource.data.blockedUid == blockedUid &&
+        request.resource.data.displayNameSnapshot is string &&
+        request.resource.data.displayNameSnapshot.size() >= 2 && request.resource.data.displayNameSnapshot.size() <= 80 &&
+        request.resource.data.bookingId is string &&
+        bookingParticipant(request.resource.data.bookingId) &&
+        blockedUid == otherParticipant(bookingDoc(request.resource.data.bookingId).data) &&
+        request.resource.data.createdAt == request.time;
+      allow update: if false;
       allow delete: if isSelf(uid);
     }
 
@@ -455,10 +479,30 @@ service cloud.firestore {
         ((request.resource.data.targetType == 'user' && request.resource.data.targetId == request.resource.data.targetUserId) ||
          (request.resource.data.targetType == 'message' &&
           get(/databases/$(database)/documents/bookings/$(request.resource.data.bookingId)/messages/$(request.resource.data.targetId)).data.senderId == request.resource.data.targetUserId)) &&
-        request.resource.data.reason in ['abusive_content', 'harassment', 'spam', 'fraud', 'unsafe_behavior', 'objectionable_content', 'other'] &&
+        reportId == request.auth.uid + '_' + request.resource.data.bookingId + '_' + request.resource.data.targetType + '_' + request.resource.data.targetId &&
+        ((request.resource.data.targetType == 'user' &&
+          request.resource.data.reason in ['harassment', 'fraud', 'spam', 'unsafe_behavior', 'other']) ||
+         (request.resource.data.targetType == 'message' &&
+          request.resource.data.reason in ['abusive_content', 'harassment', 'spam', 'fraud', 'objectionable_content', 'other'])) &&
         request.resource.data.details is string && request.resource.data.details.size() <= 1000 &&
+        (request.resource.data.reason != 'other' || request.resource.data.details.size() >= 3) &&
         request.resource.data.status == 'open' && request.resource.data.moderationNotes == '' &&
         request.resource.data.createdAt == request.time && request.resource.data.updatedAt == request.time;
+      allow update, delete: if false;
+    }
+
+    match /deletion_requests/{uid} {
+      allow read: if isSelf(uid);
+      allow create: if isSelf(uid) &&
+        recentlyAuthenticated() &&
+        request.resource.data.keys().hasOnly([
+          'uid', 'status', 'failureMessage', 'requestedAt', 'updatedAt'
+        ]) && request.resource.data.uid == uid &&
+        request.resource.data.status == 'requested' &&
+        request.resource.data.failureMessage == '' &&
+        request.resource.data.requestedAt == request.time &&
+        request.resource.data.updatedAt == request.time &&
+        getAfter(/databases/$(database)/documents/users/$(uid)).data.status == 'deletionPending';
       allow update, delete: if false;
     }
 
