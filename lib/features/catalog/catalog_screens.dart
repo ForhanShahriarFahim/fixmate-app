@@ -6,6 +6,7 @@ import 'package:fixmate/core/data/firebase_providers.dart';
 import 'package:fixmate/core/domain/models.dart';
 import 'package:fixmate/core/locations/bangladesh_locations.dart';
 import 'package:fixmate/core/utils/error_messages.dart';
+import 'package:fixmate/core/utils/formatters.dart';
 import 'package:fixmate/core/utils/validators.dart';
 import 'package:fixmate/core/widgets/common_widgets.dart';
 
@@ -31,8 +32,8 @@ class _CustomerHomeScreenState extends ConsumerState<CustomerHomeScreen> {
   String? _districtCode;
   String _areaKey = '';
   int? _maxPrice;
-  double _minimumRating = 0;
   String _search = '';
+  int _serviceLimit = 20;
 
   @override
   Widget build(BuildContext context) {
@@ -40,7 +41,11 @@ class _CustomerHomeScreenState extends ConsumerState<CustomerHomeScreen> {
     final locations = ref.watch(bangladeshLocationsProvider);
     final services = ref
         .read(marketplaceRepositoryProvider)
-        .watchServices(categoryId: _categoryId, districtCode: _districtCode);
+        .watchServices(
+          categoryId: _categoryId,
+          districtCode: _districtCode,
+          limit: _serviceLimit,
+        );
 
     return Scaffold(
       appBar: AppBar(
@@ -155,70 +160,35 @@ class _CustomerHomeScreenState extends ConsumerState<CustomerHomeScreen> {
                           ),
                         ),
                         const SizedBox(height: 10),
-                        Row(
-                          children: [
-                            Expanded(
-                              child: DropdownButtonFormField<int?>(
-                                initialValue: _maxPrice,
-                                decoration: const InputDecoration(
-                                  labelText: 'Maximum price',
-                                ),
-                                items: const [
-                                  DropdownMenuItem<int?>(
-                                    value: null,
-                                    child: Text('Any price'),
-                                  ),
-                                  DropdownMenuItem<int?>(
-                                    value: 1000,
-                                    child: Text('৳1,000'),
-                                  ),
-                                  DropdownMenuItem<int?>(
-                                    value: 2500,
-                                    child: Text('৳2,500'),
-                                  ),
-                                  DropdownMenuItem<int?>(
-                                    value: 5000,
-                                    child: Text('৳5,000'),
-                                  ),
-                                  DropdownMenuItem<int?>(
-                                    value: 10000,
-                                    child: Text('৳10,000'),
-                                  ),
-                                ],
-                                onChanged: (value) =>
-                                    setState(() => _maxPrice = value),
-                              ),
+                        DropdownButtonFormField<int?>(
+                          initialValue: _maxPrice,
+                          decoration: const InputDecoration(
+                            labelText: 'Maximum price',
+                          ),
+                          items: const [
+                            DropdownMenuItem<int?>(
+                              value: null,
+                              child: Text('Any price'),
                             ),
-                            const SizedBox(width: 10),
-                            Expanded(
-                              child: DropdownButtonFormField<double>(
-                                initialValue: _minimumRating,
-                                decoration: const InputDecoration(
-                                  labelText: 'Minimum rating',
-                                ),
-                                items: const [
-                                  DropdownMenuItem(
-                                    value: 0,
-                                    child: Text('Any rating'),
-                                  ),
-                                  DropdownMenuItem(
-                                    value: 3,
-                                    child: Text('3.0+ ★'),
-                                  ),
-                                  DropdownMenuItem(
-                                    value: 4,
-                                    child: Text('4.0+ ★'),
-                                  ),
-                                  DropdownMenuItem(
-                                    value: 4.5,
-                                    child: Text('4.5+ ★'),
-                                  ),
-                                ],
-                                onChanged: (value) =>
-                                    setState(() => _minimumRating = value ?? 0),
-                              ),
+                            DropdownMenuItem<int?>(
+                              value: 1000,
+                              child: Text('৳1,000'),
+                            ),
+                            DropdownMenuItem<int?>(
+                              value: 2500,
+                              child: Text('৳2,500'),
+                            ),
+                            DropdownMenuItem<int?>(
+                              value: 5000,
+                              child: Text('৳5,000'),
+                            ),
+                            DropdownMenuItem<int?>(
+                              value: 10000,
+                              child: Text('৳10,000'),
                             ),
                           ],
+                          onChanged: (value) =>
+                              setState(() => _maxPrice = value),
                         ),
                         const SizedBox(height: 10),
                       ],
@@ -293,7 +263,10 @@ class _CustomerHomeScreenState extends ConsumerState<CustomerHomeScreen> {
               stream: services,
               builder: (context, snapshot) {
                 if (snapshot.hasError) {
-                  return ErrorView(message: friendlyError(snapshot.error!));
+                  return ErrorView(
+                    message: friendlyError(snapshot.error!),
+                    onRetry: () => setState(() {}),
+                  );
                 }
                 if (!snapshot.hasData) {
                   return const Padding(
@@ -320,7 +293,6 @@ class _CustomerHomeScreenState extends ConsumerState<CustomerHomeScreen> {
                               service.areaKeys.contains(_areaKey)) &&
                           (_maxPrice == null ||
                               service.priceBdt <= _maxPrice!) &&
-                          service.providerRating >= _minimumRating &&
                           (_search.isEmpty ||
                               service.title.toLowerCase().contains(_search) ||
                               service.providerName.toLowerCase().contains(
@@ -340,9 +312,15 @@ class _CustomerHomeScreenState extends ConsumerState<CustomerHomeScreen> {
                   );
                 }
                 return Column(
-                  children: items
-                      .map((service) => ServiceCard(service: service))
-                      .toList(growable: false),
+                  children: [
+                    ...items.map((service) => ServiceCard(service: service)),
+                    if (items.length >= _serviceLimit)
+                      OutlinedButton.icon(
+                        onPressed: () => setState(() => _serviceLimit += 20),
+                        icon: const Icon(Icons.expand_more),
+                        label: const Text('Load more services'),
+                      ),
+                  ],
                 );
               },
             ),
@@ -400,7 +378,7 @@ class ServiceCard extends StatelessWidget {
                       const Text('Approved provider'),
                       const Spacer(),
                       Text(
-                        '৳${NumberFormat.decimalPattern().format(service.priceBdt)}',
+                        formatBdt(service.priceBdt),
                         style: const TextStyle(fontWeight: FontWeight.bold),
                       ),
                     ],
@@ -426,7 +404,10 @@ class ServiceDetailScreen extends ConsumerWidget {
       appBar: AppBar(title: const Text('Service details')),
       body: serviceAsync.when(
         loading: () => const LoadingView(),
-        error: (error, stack) => ErrorView(message: friendlyError(error)),
+        error: (error, stack) => ErrorView(
+          message: friendlyError(error),
+          onRetry: () => ref.invalidate(serviceProvider(serviceId)),
+        ),
         data: (service) {
           if (service == null) {
             return const EmptyView(
@@ -459,17 +440,19 @@ class ServiceDetailScreen extends ConsumerWidget {
               const SizedBox(height: 18),
               Card(
                 child: ListTile(
+                  onTap: () => context.push('/provider/${service.providerId}'),
                   leading: const CircleAvatar(child: Icon(Icons.person)),
                   title: Text(service.providerName),
                   subtitle: provider.when(
                     data: (value) => Text(
-                      value == null
-                          ? 'Approved provider'
-                          : '${value.experienceYears} years experience • approved provider',
+                      value?.isBookable == true
+                          ? '${value!.experienceYears} years experience • approved provider'
+                          : 'Provider is currently unavailable',
                     ),
                     loading: () => const Text('Loading provider…'),
-                    error: (_, _) => const Text('Approved provider'),
+                    error: (_, _) => const Text('Provider unavailable'),
                   ),
+                  trailing: const Icon(Icons.chevron_right),
                 ),
               ),
               const SizedBox(height: 12),
@@ -494,16 +477,22 @@ class ServiceDetailScreen extends ConsumerWidget {
                     ),
                   ),
                   Text(
-                    '৳${NumberFormat.decimalPattern().format(service.priceBdt)}',
+                    formatBdt(service.priceBdt),
                     style: Theme.of(context).textTheme.headlineSmall,
                   ),
                 ],
               ),
               const SizedBox(height: 24),
               FilledButton.icon(
-                onPressed: () => context.push('/book/${service.id}'),
+                onPressed: provider.value?.isBookable == true
+                    ? () => context.push('/book/${service.id}')
+                    : null,
                 icon: const Icon(Icons.calendar_month),
-                label: const Text('Request booking'),
+                label: Text(
+                  provider.value?.isBookable == true
+                      ? 'Request booking'
+                      : 'Provider unavailable',
+                ),
               ),
               const SizedBox(height: 24),
               Text(
@@ -523,20 +512,21 @@ class ServiceDetailScreen extends ConsumerWidget {
                     );
                   }
                   final reviews = snapshot.data!;
-                  final average =
-                      reviews.fold<int>(
-                        0,
-                        (total, review) => total + review.rating,
-                      ) /
-                      reviews.length;
                   return Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 10),
-                        child: Text(
-                          '${average.toStringAsFixed(1)} ★ from ${reviews.length} reviews',
-                          style: Theme.of(context).textTheme.titleMedium,
+                      FutureBuilder<ReviewSummary>(
+                        future: ref
+                            .read(marketplaceRepositoryProvider)
+                            .getProviderReviewSummary(service.providerId),
+                        builder: (context, summary) => Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 10),
+                          child: Text(
+                            summary.data?.hasReviews == true
+                                ? '${summary.data!.average!.toStringAsFixed(1)} ★ from ${summary.data!.count} reviews'
+                                : 'Customer reviews',
+                            style: Theme.of(context).textTheme.titleMedium,
+                          ),
                         ),
                       ),
                       ...reviews
@@ -558,6 +548,211 @@ class ServiceDetailScreen extends ConsumerWidget {
                     ],
                   );
                 },
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+}
+
+class PublicProviderProfileScreen extends ConsumerStatefulWidget {
+  const PublicProviderProfileScreen({required this.providerId, super.key});
+
+  final String providerId;
+
+  @override
+  ConsumerState<PublicProviderProfileScreen> createState() =>
+      _PublicProviderProfileScreenState();
+}
+
+class _PublicProviderProfileScreenState
+    extends ConsumerState<PublicProviderProfileScreen> {
+  int _reviewLimit = 20;
+  int _serviceLimit = 20;
+
+  @override
+  Widget build(BuildContext context) {
+    final profile = ref.watch(providerProfileProvider(widget.providerId));
+    final repository = ref.read(marketplaceRepositoryProvider);
+    return Scaffold(
+      appBar: AppBar(title: const Text('Provider profile')),
+      body: profile.when(
+        loading: () => const LoadingView(),
+        error: (error, stack) => ErrorView(
+          message: friendlyError(error),
+          onRetry: () =>
+              ref.invalidate(providerProfileProvider(widget.providerId)),
+        ),
+        data: (provider) {
+          if (provider == null ||
+              provider.approvalStatus != ProviderApprovalStatus.approved) {
+            return const EmptyView(
+              icon: Icons.person_off_outlined,
+              title: 'Provider unavailable',
+              message: 'This public provider profile is not available.',
+            );
+          }
+          return ListView(
+            padding: const EdgeInsets.all(18),
+            children: [
+              Semantics(
+                label: 'Provider ${provider.publicName}',
+                child: CircleAvatar(
+                  radius: 44,
+                  child: Text(
+                    provider.publicName.isEmpty
+                        ? '?'
+                        : provider.publicName[0].toUpperCase(),
+                    style: Theme.of(context).textTheme.headlineMedium,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 12),
+              Text(
+                provider.publicName,
+                textAlign: TextAlign.center,
+                style: Theme.of(context).textTheme.headlineSmall,
+              ),
+              Text(
+                provider.isBookable
+                    ? 'Approved FixMate provider'
+                    : 'Currently unavailable for new bookings',
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 20),
+              FutureBuilder<ReviewSummary>(
+                future: repository.getProviderReviewSummary(widget.providerId),
+                builder: (context, snapshot) {
+                  if (snapshot.connectionState == ConnectionState.waiting) {
+                    return const LinearProgressIndicator();
+                  }
+                  if (snapshot.hasError) {
+                    return Text(friendlyError(snapshot.error!));
+                  }
+                  final summary = snapshot.data;
+                  return Card(
+                    child: ListTile(
+                      leading: const Icon(Icons.star_outline),
+                      title: Text(
+                        summary?.hasReviews == true
+                            ? '${summary!.average!.toStringAsFixed(1)} out of 5'
+                            : 'No verified rating yet',
+                      ),
+                      subtitle: Text(
+                        summary?.hasReviews == true
+                            ? '${summary!.count} verified customer reviews'
+                            : 'A rating appears after a completed booking is reviewed.',
+                      ),
+                    ),
+                  );
+                },
+              ),
+              const SizedBox(height: 16),
+              Text('About', style: Theme.of(context).textTheme.titleLarge),
+              const SizedBox(height: 6),
+              Text(provider.bio),
+              const SizedBox(height: 8),
+              Text('${provider.experienceYears} years of experience'),
+              const SizedBox(height: 18),
+              Text(
+                'Approved service coverage',
+                style: Theme.of(context).textTheme.titleLarge,
+              ),
+              const SizedBox(height: 8),
+              Wrap(
+                spacing: 8,
+                runSpacing: 4,
+                children: provider.serviceAreaLabels
+                    .map((area) => Chip(label: Text(area)))
+                    .toList(growable: false),
+              ),
+              const SizedBox(height: 22),
+              Text(
+                'Active services',
+                style: Theme.of(context).textTheme.titleLarge,
+              ),
+              StreamBuilder<List<ServiceListing>>(
+                stream: repository.watchProviderPublicServices(
+                  widget.providerId,
+                  limit: _serviceLimit,
+                ),
+                builder: (context, snapshot) {
+                  if (snapshot.hasError) {
+                    return ErrorView(message: friendlyError(snapshot.error!));
+                  }
+                  if (!snapshot.hasData) return const LinearProgressIndicator();
+                  if (snapshot.data!.isEmpty) {
+                    return const Padding(
+                      padding: EdgeInsets.symmetric(vertical: 12),
+                      child: Text('No active services are available.'),
+                    );
+                  }
+                  return Column(
+                    children: [
+                      ...snapshot.data!.map(
+                        (service) => ServiceCard(service: service),
+                      ),
+                      if (snapshot.data!.length >= _serviceLimit)
+                        OutlinedButton(
+                          onPressed: () => setState(() => _serviceLimit += 20),
+                          child: const Text('Load more services'),
+                        ),
+                    ],
+                  );
+                },
+              ),
+              const SizedBox(height: 22),
+              Text(
+                'Customer reviews',
+                style: Theme.of(context).textTheme.titleLarge,
+              ),
+              StreamBuilder<List<ServiceReview>>(
+                stream: repository.watchProviderReviews(
+                  widget.providerId,
+                  limit: _reviewLimit,
+                ),
+                builder: (context, snapshot) {
+                  if (snapshot.hasError) {
+                    return ErrorView(message: friendlyError(snapshot.error!));
+                  }
+                  if (!snapshot.hasData) return const LinearProgressIndicator();
+                  if (snapshot.data!.isEmpty) {
+                    return const Padding(
+                      padding: EdgeInsets.symmetric(vertical: 12),
+                      child: Text('No reviews yet.'),
+                    );
+                  }
+                  return Column(
+                    children: [
+                      ...snapshot.data!.map(
+                        (review) => ListTile(
+                          contentPadding: EdgeInsets.zero,
+                          leading: CircleAvatar(
+                            child: Text('${review.rating}'),
+                          ),
+                          title: Text(review.customerName),
+                          subtitle: Text(
+                            review.comment.isEmpty
+                                ? 'Rated ${review.rating} out of 5'
+                                : review.comment,
+                          ),
+                        ),
+                      ),
+                      if (snapshot.data!.length >= _reviewLimit)
+                        OutlinedButton(
+                          onPressed: () => setState(() => _reviewLimit += 20),
+                          child: const Text('Load more reviews'),
+                        ),
+                    ],
+                  );
+                },
+              ),
+              const SizedBox(height: 20),
+              const Text(
+                'For privacy, phone numbers, email addresses, and booking addresses are never shown on public profiles.',
+                textAlign: TextAlign.center,
               ),
             ],
           );
@@ -667,9 +862,7 @@ class _CreateBookingScreenState extends ConsumerState<CreateBookingScreen> {
                     value.title,
                     style: Theme.of(context).textTheme.titleLarge,
                   ),
-                  Text(
-                    'Locked price: ৳${NumberFormat.decimalPattern().format(value.priceBdt)}',
-                  ),
+                  Text('Locked price: ${formatBdt(value.priceBdt)}'),
                   const SizedBox(height: 22),
                   OutlinedButton.icon(
                     onPressed: _chooseDate,

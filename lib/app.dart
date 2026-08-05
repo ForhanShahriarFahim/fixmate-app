@@ -5,9 +5,14 @@ import 'package:fixmate/core/theme/app_theme.dart';
 import 'package:fixmate/core/widgets/firebase_setup_required_screen.dart';
 
 class FixMateApp extends ConsumerWidget {
-  const FixMateApp({required this.firebaseConfigured, super.key});
+  const FixMateApp({
+    required this.firebaseConfigured,
+    this.firebaseSetupMessage,
+    super.key,
+  });
 
   final bool firebaseConfigured;
+  final String? firebaseSetupMessage;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -16,7 +21,7 @@ class FixMateApp extends ConsumerWidget {
         debugShowCheckedModeBanner: false,
         title: 'FixMate setup',
         theme: AppTheme.light(),
-        home: const FirebaseSetupRequiredScreen(),
+        home: FirebaseSetupRequiredScreen(message: firebaseSetupMessage),
       );
     }
 

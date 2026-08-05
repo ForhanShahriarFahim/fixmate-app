@@ -84,12 +84,31 @@ before(async () => {
       photoPath: null, termsVersion: "1.0", isAdultConfirmed: true,
       createdAt, updatedAt: createdAt, termsAcceptedAt: createdAt,
     });
+    await setDoc(doc(firestore, "users/applicant"), {
+      role: "provider", status: "active", displayName: "Applicant User",
+      email: "applicant@example.com", phoneE164: "+8801700000004",
+      photoPath: null, termsVersion: "1.0", isAdultConfirmed: true,
+      createdAt, updatedAt: createdAt, termsAcceptedAt: createdAt,
+    });
+    await setDoc(doc(firestore, "users/suspended-provider"), {
+      role: "provider", status: "suspended", displayName: "Suspended Provider",
+      email: "suspended@example.com", phoneE164: "+8801700000005",
+      photoPath: null, termsVersion: "1.0", isAdultConfirmed: true,
+      createdAt, updatedAt: createdAt, termsAcceptedAt: createdAt,
+    });
+    await setDoc(doc(firestore, "users/suspended-customer"), {
+      role: "customer", status: "suspended", displayName: "Suspended Customer",
+      email: "suspended-customer@example.com", phoneE164: "+8801700000007",
+      photoPath: null, termsVersion: "1.0", isAdultConfirmed: true,
+      createdAt, updatedAt: createdAt, termsAcceptedAt: createdAt,
+    });
     await setDoc(doc(firestore, "provider_profiles/provider"), {
       providerId: "provider", publicName: "Provider User", avatarUrl: null,
       bio: "Experienced and careful electrical service provider.",
       experienceYears: 5, divisionCode: "dhaka", districtCode: "dhaka",
       serviceAreaLabels: ["Dhanmondi"], serviceAreaKeys: ["dhanmondi"],
-      approvalStatus: "approved", ratingAverage: 0, reviewCount: 0,
+      approvalStatus: "approved", marketplaceVisible: true,
+      ratingAverage: 0, reviewCount: 0,
       completedBookings: 0, createdAt, updatedAt: createdAt,
     });
     await setDoc(doc(firestore, "categories/electrical"), {
@@ -104,6 +123,36 @@ before(async () => {
       areaLabels: ["Dhanmondi"], areaKeys: ["dhanmondi"],
       searchTokens: ["electrical", "safety", "inspection"], status: "active",
       providerRating: 0, reviewCount: 0, createdAt, updatedAt: createdAt,
+    });
+    await setDoc(doc(firestore, "provider_profiles/suspended-provider"), {
+      providerId: "suspended-provider", publicName: "Suspended Provider", avatarUrl: null,
+      bio: "This provider is not eligible to participate in the marketplace.",
+      experienceYears: 5, divisionCode: "dhaka", districtCode: "dhaka",
+      serviceAreaLabels: ["Dhanmondi"], serviceAreaKeys: ["dhanmondi"],
+      approvalStatus: "approved", marketplaceVisible: true,
+      ratingAverage: 0, reviewCount: 0, completedBookings: 0,
+      createdAt, updatedAt: createdAt,
+    });
+    await setDoc(doc(firestore, "services/suspended-service"), {
+      providerId: "suspended-provider", providerName: "Suspended Provider",
+      categoryId: "electrical", title: "Suspended electrical service",
+      description: "A stale listing whose provider account is currently suspended.",
+      priceBdt: 900, coverImageUrl: null, districtCode: "dhaka",
+      areaLabels: ["Dhanmondi"], areaKeys: ["dhanmondi"],
+      searchTokens: ["suspended", "electrical"], status: "active",
+      providerRating: 0, reviewCount: 0, createdAt, updatedAt: createdAt,
+    });
+    await setDoc(doc(firestore, "bookings/suspended-recipient"), bookingData("accepted", {
+      customerId: "suspended-customer", customerName: "Suspended Customer",
+      scheduleDateKey: "2030-03-01", scheduledStart: new Date("2030-03-01T02:00:00Z"),
+      lastEventId: "seed-suspended-recipient",
+    }));
+    await setDoc(doc(firestore, "bookings/suspended-recipient/private/contact"), {
+      customerPhone: "+8801700000007", providerPhone: "+8801700000002",
+      address: "House 1, Road 2, Dhanmondi", landmark: "Near the park",
+    });
+    await setDoc(doc(firestore, "bookings/suspended-recipient/events/seed-suspended-recipient"), {
+      type: "accepted", actorId: "provider", createdAt,
     });
 
     for (const [id, status] of [
@@ -122,6 +171,35 @@ before(async () => {
         type: status, actorId: "customer", createdAt,
       });
     }
+    for (const item of [
+      { id: "accepted-transition", status: "accepted", date: "2030-02-01", window: "morning" },
+      { id: "completion-complete", status: "completionRequested", date: "2030-02-02", window: "afternoon" },
+      { id: "completion-dispute", status: "completionRequested", date: "2030-02-03", window: "evening" },
+      { id: "pending-cancel", status: "pending", date: "2030-02-04", window: "morning" },
+      { id: "accepted-cancel", status: "accepted", date: "2030-02-05", window: "afternoon" },
+    ]) {
+      await setDoc(doc(firestore, `bookings/${item.id}`), bookingData(item.status, {
+        scheduleDateKey: item.date,
+        scheduledStart: new Date(`${item.date}T02:00:00Z`),
+        timeWindow: item.window,
+        lastEventId: `seed-${item.id}`,
+      }));
+      await setDoc(doc(firestore, `bookings/${item.id}/private/contact`), {
+        customerPhone: "+8801700000001",
+        providerPhone: item.status === "pending" ? "" : "+8801700000002",
+        address: "House 1, Road 2, Dhanmondi",
+        landmark: "Near the park",
+      });
+      await setDoc(doc(firestore, `bookings/${item.id}/events/seed-${item.id}`), {
+        type: item.status, actorId: "customer", createdAt,
+      });
+      if (item.status !== "pending") {
+        await setDoc(doc(firestore, `provider_slots/provider_${item.date}_${item.window}`), {
+          providerId: "provider", bookingId: item.id, scheduleDateKey: item.date,
+          timeWindow: item.window, createdAt,
+        });
+      }
+    }
     await setDoc(doc(firestore, `provider_slots/provider_${futureDate}_morning`), {
       providerId: "provider", bookingId: "accepted", scheduleDateKey: futureDate,
       timeWindow: "morning", createdAt,
@@ -139,14 +217,167 @@ after(async () => {
 function customerDb() {
   return environment.authenticatedContext("customer", {
     email: "customer@example.com", email_verified: true,
+    auth_time: Math.floor(Date.now() / 1000),
   }).firestore();
 }
 
 function providerDb() {
   return environment.authenticatedContext("provider", {
     email: "provider@example.com", email_verified: true,
+    auth_time: Math.floor(Date.now() / 1000),
   }).firestore();
 }
+
+test("public reads stay public while unauthenticated private access and writes are denied", { skip: !emulatorAvailable }, async () => {
+  const firestore = environment.unauthenticatedContext().firestore();
+  await assertSucceeds(getDoc(doc(firestore, "services/service")));
+  await assertFails(getDoc(doc(firestore, "users/customer")));
+  await assertFails(setDoc(doc(firestore, "services/anonymous"), {
+    providerId: "provider", status: "active",
+  }));
+});
+
+test("unverified accounts cannot perform marketplace mutations", { skip: !emulatorAvailable }, async () => {
+  const unverifiedCustomer = environment.authenticatedContext("customer", {
+    email: "customer@example.com", email_verified: false,
+  }).firestore();
+  const bookingBatch = writeBatch(unverifiedCustomer);
+  bookingBatch.set(doc(unverifiedCustomer, "bookings/unverified-booking"), {
+    ...bookingData("pending", {
+      lastEventId: "unverified-event",
+      createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
+    }),
+  });
+  bookingBatch.set(doc(unverifiedCustomer, "bookings/unverified-booking/private/contact"), {
+    customerPhone: "+8801700000001", providerPhone: "",
+    address: "House 20, Dhanmondi, Dhaka", landmark: "Near lake",
+  });
+  bookingBatch.set(doc(unverifiedCustomer, "bookings/unverified-booking/events/unverified-event"), {
+    type: "pending", actorId: "customer", createdAt: serverTimestamp(),
+  });
+  await assertFails(bookingBatch.commit());
+
+  const unverifiedProvider = environment.authenticatedContext("provider", {
+    email: "provider@example.com", email_verified: false,
+  }).firestore();
+  await assertFails(setDoc(doc(unverifiedProvider, "services/unverified-service"), {
+    providerId: "provider", providerName: "Provider User",
+    categoryId: "electrical", title: "Unverified electrical service",
+    description: "A complete home electrical service from an unverified account.",
+    priceBdt: 1200, coverImageUrl: null, districtCode: "dhaka",
+    areaLabels: ["Dhanmondi"], areaKeys: ["dhanmondi"],
+    searchTokens: ["unverified", "electrical"], status: "active",
+    createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
+  }));
+});
+
+test("provider applications start pending and cannot self-approve", { skip: !emulatorAvailable }, async () => {
+  const firestore = environment.authenticatedContext("applicant", {
+    email: "applicant@example.com", email_verified: true,
+  }).firestore();
+  const profile = doc(firestore, "provider_profiles/applicant");
+  await assertSucceeds(setDoc(profile, {
+    providerId: "applicant", publicName: "Applicant User", avatarUrl: null,
+    bio: "A qualified provider applying to join the FixMate marketplace.",
+    experienceYears: 3, divisionCode: "dhaka", districtCode: "dhaka",
+    serviceAreaLabels: ["Dhanmondi"], serviceAreaKeys: ["dhanmondi"],
+    approvalStatus: "pending", marketplaceVisible: false,
+    ratingAverage: 0, reviewCount: 0, completedBookings: 0,
+    createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
+  }));
+  await assertFails(updateDoc(profile, {
+    approvalStatus: "approved", marketplaceVisible: true,
+    updatedAt: serverTimestamp(),
+  }));
+});
+
+test("approved providers can create and update only their own valid services", { skip: !emulatorAvailable }, async () => {
+  const firestore = providerDb();
+  const service = doc(firestore, "services/provider-managed");
+  await assertSucceeds(setDoc(service, {
+    providerId: "provider", providerName: "Provider User",
+    categoryId: "electrical", title: "Electrical wiring inspection",
+    description: "A detailed electrical wiring inspection for residential properties.",
+    priceBdt: 1400, coverImageUrl: null, districtCode: "dhaka",
+    areaLabels: ["Dhanmondi"], areaKeys: ["dhanmondi"],
+    searchTokens: ["electrical", "wiring", "inspection"], status: "active",
+    createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
+  }));
+  await assertSucceeds(updateDoc(service, {
+    priceBdt: 1500, description: "An updated electrical wiring inspection for residential properties.",
+    updatedAt: serverTimestamp(),
+  }));
+  await assertFails(updateDoc(service, {
+    providerId: "stranger", updatedAt: serverTimestamp(),
+  }));
+  await assertFails(updateDoc(service, {
+    providerRating: 5, reviewCount: 100, updatedAt: serverTimestamp(),
+  }));
+});
+
+test("suspended providers and their stale listings cannot create marketplace data", { skip: !emulatorAvailable }, async () => {
+  const suspended = environment.authenticatedContext("suspended-provider", {
+    email: "suspended@example.com", email_verified: true,
+  }).firestore();
+  await assertFails(setDoc(doc(suspended, "services/suspended-provider-new"), {
+    providerId: "suspended-provider", providerName: "Suspended Provider",
+    categoryId: "electrical", title: "New suspended provider service",
+    description: "A service that a suspended provider must not be allowed to publish.",
+    priceBdt: 900, coverImageUrl: null, districtCode: "dhaka",
+    areaLabels: ["Dhanmondi"], areaKeys: ["dhanmondi"],
+    searchTokens: ["suspended", "service"], status: "active",
+    createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
+  }));
+
+  const customer = customerDb();
+  const bookingBatch = writeBatch(customer);
+  bookingBatch.set(doc(customer, "bookings/stale-provider-booking"), {
+    ...bookingData("pending", {
+      providerId: "suspended-provider", serviceId: "suspended-service",
+      providerName: "Suspended Provider", serviceTitle: "Suspended electrical service",
+      priceBdt: 900, lastEventId: "stale-provider-event",
+      createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
+    }),
+  });
+  bookingBatch.set(doc(customer, "bookings/stale-provider-booking/private/contact"), {
+    customerPhone: "+8801700000001", providerPhone: "",
+    address: "House 20, Dhanmondi, Dhaka", landmark: "Near lake",
+  });
+  bookingBatch.set(doc(customer, "bookings/stale-provider-booking/events/stale-provider-event"), {
+    type: "pending", actorId: "customer", createdAt: serverTimestamp(),
+  });
+  await assertFails(bookingBatch.commit());
+});
+
+test("clients cannot supply privileged account, aggregate, or booking fields", { skip: !emulatorAvailable }, async () => {
+  const firestore = environment.authenticatedContext("new-customer", {
+    email: "new-customer@example.com", email_verified: true,
+  }).firestore();
+  await assertFails(setDoc(doc(firestore, "users/new-customer"), {
+    role: "customer", status: "suspended", displayName: "New Customer",
+    email: "new-customer@example.com", phoneE164: "+8801700000006",
+    photoPath: null, termsVersion: "1.0", isAdultConfirmed: true,
+    termsAcceptedAt: serverTimestamp(), createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  }));
+
+  const customer = customerDb();
+  const bookingBatch = writeBatch(customer);
+  bookingBatch.set(doc(customer, "bookings/privileged-field"), {
+    ...bookingData("pending", {
+      lastEventId: "privileged-event", moderationStatus: "resolved",
+      createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
+    }),
+  });
+  bookingBatch.set(doc(customer, "bookings/privileged-field/private/contact"), {
+    customerPhone: "+8801700000001", providerPhone: "",
+    address: "House 20, Dhanmondi, Dhaka", landmark: "Near lake",
+  });
+  bookingBatch.set(doc(customer, "bookings/privileged-field/events/privileged-event"), {
+    type: "pending", actorId: "customer", createdAt: serverTimestamp(),
+  });
+  await assertFails(bookingBatch.commit());
+});
 
 test("private profiles and booking contacts remain participant-scoped", { skip: !emulatorAvailable }, async () => {
   const customer = customerDb();
@@ -236,6 +467,101 @@ test("provider accepts with contact release, event, and a unique slot", { skip: 
   await assertSucceeds(batch.commit());
 });
 
+test("customer cannot forge the locked service price", { skip: !emulatorAvailable }, async () => {
+  const firestore = customerDb();
+  const batch = writeBatch(firestore);
+  batch.set(doc(firestore, "bookings/forged-price"), {
+    ...bookingData("pending", {
+      priceBdt: 1, lastEventId: "forged-event",
+      createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
+    }),
+  });
+  batch.set(doc(firestore, "bookings/forged-price/private/contact"), {
+    customerPhone: "+8801700000001", providerPhone: "",
+    address: "House 20, Dhanmondi, Dhaka", landmark: "Near lake",
+  });
+  batch.set(doc(firestore, "bookings/forged-price/events/forged-event"), {
+    type: "pending", actorId: "customer", createdAt: serverTimestamp(),
+  });
+  await assertFails(batch.commit());
+});
+
+test("provider can start work and request completion only with matching events", { skip: !emulatorAvailable }, async () => {
+  const firestore = providerDb();
+  const startBatch = writeBatch(firestore);
+  startBatch.update(doc(firestore, "bookings/accepted-transition"), {
+    status: "inProgress", lastEventId: "start-event", updatedAt: serverTimestamp(),
+  });
+  startBatch.set(doc(firestore, "bookings/accepted-transition/events/start-event"), {
+    type: "inProgress", actorId: "provider", createdAt: serverTimestamp(),
+  });
+  await assertSucceeds(startBatch.commit());
+
+  const completionBatch = writeBatch(firestore);
+  completionBatch.update(doc(firestore, "bookings/accepted-transition"), {
+    status: "completionRequested", lastEventId: "completion-event",
+    updatedAt: serverTimestamp(),
+  });
+  completionBatch.set(doc(firestore, "bookings/accepted-transition/events/completion-event"), {
+    type: "completionRequested", actorId: "provider", createdAt: serverTimestamp(),
+  });
+  await assertSucceeds(completionBatch.commit());
+});
+
+test("customer can confirm cash completion or open a dispute", { skip: !emulatorAvailable }, async () => {
+  const firestore = customerDb();
+  const completeBatch = writeBatch(firestore);
+  completeBatch.update(doc(firestore, "bookings/completion-complete"), {
+    status: "completed", paymentStatus: "paidCash",
+    completedAt: serverTimestamp(), lastEventId: "completed-event",
+    updatedAt: serverTimestamp(),
+  });
+  completeBatch.set(doc(firestore, "bookings/completion-complete/events/completed-event"), {
+    type: "completed", actorId: "customer", createdAt: serverTimestamp(),
+  });
+  completeBatch.delete(doc(firestore, "provider_slots/provider_2030-02-02_afternoon"));
+  await assertSucceeds(completeBatch.commit());
+
+  const disputeBatch = writeBatch(firestore);
+  disputeBatch.update(doc(firestore, "bookings/completion-dispute"), {
+    status: "disputed", paymentStatus: "disputed",
+    dispute: { reason: "service_issue", details: "Work is incomplete", actorId: "customer", createdAt: serverTimestamp() },
+    lastEventId: "disputed-event", updatedAt: serverTimestamp(),
+  });
+  disputeBatch.set(doc(firestore, "bookings/completion-dispute/events/disputed-event"), {
+    type: "disputed", actorId: "customer", createdAt: serverTimestamp(),
+  });
+  disputeBatch.delete(doc(firestore, "provider_slots/provider_2030-02-03_evening"));
+  await assertSucceeds(disputeBatch.commit());
+});
+
+test("participants can cancel pending or accepted bookings with reasons", { skip: !emulatorAvailable }, async () => {
+  const customer = customerDb();
+  const pendingBatch = writeBatch(customer);
+  pendingBatch.update(doc(customer, "bookings/pending-cancel"), {
+    status: "cancelled",
+    cancellation: { reason: "schedule_changed", details: "Need another day", actorId: "customer", createdAt: serverTimestamp() },
+    lastEventId: "pending-cancel-event", updatedAt: serverTimestamp(),
+  });
+  pendingBatch.set(doc(customer, "bookings/pending-cancel/events/pending-cancel-event"), {
+    type: "cancelled", actorId: "customer", createdAt: serverTimestamp(),
+  });
+  await assertSucceeds(pendingBatch.commit());
+
+  const provider = providerDb();
+  const acceptedBatch = writeBatch(provider);
+  acceptedBatch.update(doc(provider, "bookings/accepted-cancel"), {
+    status: "cancelled",
+    cancellation: { reason: "provider_unavailable", details: "Unable to attend", actorId: "provider", createdAt: serverTimestamp() },
+    lastEventId: "accepted-cancel-event", updatedAt: serverTimestamp(),
+  });
+  acceptedBatch.set(doc(provider, "bookings/accepted-cancel/events/accepted-cancel-event"), {
+    type: "cancelled", actorId: "provider", createdAt: serverTimestamp(),
+  });
+  acceptedBatch.delete(doc(provider, "provider_slots/provider_2030-02-05_afternoon"));
+  await assertSucceeds(acceptedBatch.commit());
+});
+
 test("participant sends chat only with matching booking metadata", { skip: !emulatorAvailable }, async () => {
   const firestore = customerDb();
   const batch = writeBatch(firestore);
@@ -266,6 +592,38 @@ test("participant sends chat only with matching booking metadata", { skip: !emul
   await assertFails(blockedBatch.commit());
 });
 
+test("messages are denied when the other participant is suspended", { skip: !emulatorAvailable }, async () => {
+  const firestore = providerDb();
+  const batch = writeBatch(firestore);
+  batch.set(doc(firestore, "bookings/suspended-recipient/messages/message"), {
+    senderId: "provider", text: "This must not be delivered",
+    createdAt: serverTimestamp(), readAt: null,
+  });
+  batch.update(doc(firestore, "bookings/suspended-recipient"), {
+    lastMessageId: "message", lastMessageAt: serverTimestamp(),
+    lastMessageSenderId: "provider", lastMessagePreview: "This must not be delivered",
+    updatedAt: serverTimestamp(),
+  });
+  await assertFails(batch.commit());
+});
+
+test("an active participant can cancel when the other account is suspended", { skip: !emulatorAvailable }, async () => {
+  const firestore = providerDb();
+  const batch = writeBatch(firestore);
+  batch.update(doc(firestore, "bookings/suspended-recipient"), {
+    status: "cancelled",
+    cancellation: {
+      reason: "customer_unavailable", details: "Customer account is unavailable",
+      actorId: "provider", createdAt: serverTimestamp(),
+    },
+    lastEventId: "suspended-cancel-event", updatedAt: serverTimestamp(),
+  });
+  batch.set(doc(firestore, "bookings/suspended-recipient/events/suspended-cancel-event"), {
+    type: "cancelled", actorId: "provider", createdAt: serverTimestamp(),
+  });
+  await assertSucceeds(batch.commit());
+});
+
 test("one customer review is allowed only for a completed booking", { skip: !emulatorAvailable }, async () => {
   const firestore = customerDb();
   const review = doc(firestore, "reviews/completed");
@@ -282,9 +640,9 @@ test("one customer review is allowed only for a completed booking", { skip: !emu
   }));
 });
 
-test("reports are create-only and limited to the other participant", { skip: !emulatorAvailable }, async () => {
+test("reports use contextual reasons, deterministic IDs, and are create-only", { skip: !emulatorAvailable }, async () => {
   const firestore = customerDb();
-  const report = doc(firestore, "reports/report-user");
+  const report = doc(firestore, "reports/customer_accepted_user_provider");
   await assertSucceeds(setDoc(report, {
     reporterId: "customer", targetType: "user", targetId: "provider",
     targetUserId: "provider", bookingId: "accepted", reason: "unsafe_behavior",
@@ -292,15 +650,108 @@ test("reports are create-only and limited to the other participant", { skip: !em
     createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
   }));
   await assertFails(updateDoc(report, { status: "dismissed" }));
+  await assertFails(setDoc(doc(firestore, "reports/customer_accepted_user_provider-2"), {
+    reporterId: "customer", targetType: "user", targetId: "provider",
+    targetUserId: "provider", bookingId: "accepted", reason: "abusive_content",
+    details: "", status: "open", moderationNotes: "",
+    createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
+  }));
 });
 
-test("deletion-pending users can remove only their own authored content", { skip: !emulatorAvailable }, async () => {
+test("account deletion is an atomic, idempotent request instead of client cleanup", { skip: !emulatorAvailable }, async () => {
   const firestore = customerDb();
-  await assertSucceeds(updateDoc(doc(firestore, "users/customer"), {
+  await assertFails(updateDoc(doc(firestore, "users/customer"), {
     status: "deletionPending", updatedAt: serverTimestamp(),
   }));
-  await assertSucceeds(deleteDoc(doc(firestore, "bookings/accepted/messages/existing")));
+  const stale = environment.authenticatedContext("customer", {
+    email: "customer@example.com", email_verified: true,
+    auth_time: Math.floor(Date.now() / 1000) - 700,
+  }).firestore();
+  const staleBatch = writeBatch(stale);
+  staleBatch.update(doc(stale, "users/customer"), {
+    status: "deletionPending", updatedAt: serverTimestamp(),
+  });
+  staleBatch.set(doc(stale, "deletion_requests/customer"), {
+    uid: "customer", status: "requested", failureMessage: "",
+    requestedAt: serverTimestamp(), updatedAt: serverTimestamp(),
+  });
+  await assertFails(staleBatch.commit());
+  const batch = writeBatch(firestore);
+  batch.update(doc(firestore, "users/customer"), {
+    status: "deletionPending", updatedAt: serverTimestamp(),
+  });
+  batch.set(doc(firestore, "deletion_requests/customer"), {
+    uid: "customer", status: "requested", failureMessage: "",
+    requestedAt: serverTimestamp(), updatedAt: serverTimestamp(),
+  });
+  await assertSucceeds(batch.commit());
+  await assertFails(deleteDoc(doc(firestore, "bookings/accepted/messages/existing")));
   await assertFails(deleteDoc(doc(firestore, "services/service")));
+  await assertSucceeds(getDoc(doc(firestore, "deletion_requests/customer")));
   const profile = await assertSucceeds(getDoc(doc(firestore, "users/customer")));
   assert.equal(profile.data()?.status, "deletionPending");
+  await environment.withSecurityRulesDisabled(async (context) => {
+    await updateDoc(doc(context.firestore(), "users/customer"), {
+      status: "active", updatedAt: createdAt,
+    });
+    await deleteDoc(doc(context.firestore(), "deletion_requests/customer"));
+  });
+});
+
+test("providers cannot self-approve and profile edits revoke marketplace visibility", { skip: !emulatorAvailable }, async () => {
+  const firestore = providerDb();
+  await assertFails(updateDoc(doc(firestore, "provider_profiles/provider"), {
+    publicName: "Self Approved Provider", marketplaceVisible: true,
+    updatedAt: serverTimestamp(),
+  }));
+  await assertSucceeds(updateDoc(doc(firestore, "provider_profiles/provider"), {
+    publicName: "Provider User Updated", approvalStatus: "pending",
+    marketplaceVisible: false, updatedAt: serverTimestamp(),
+  }));
+});
+
+test("services cannot publish coverage outside the approved provider profile", { skip: !emulatorAvailable }, async () => {
+  await environment.withSecurityRulesDisabled(async (context) => {
+    await updateDoc(doc(context.firestore(), "provider_profiles/provider"), {
+      publicName: "Provider User", approvalStatus: "approved",
+      marketplaceVisible: true, updatedAt: createdAt,
+    });
+  });
+  const firestore = providerDb();
+  await assertFails(setDoc(doc(firestore, "services/outside-coverage"), {
+    providerId: "provider", providerName: "Provider User",
+    categoryId: "electrical", title: "Electrical repair outside area",
+    description: "A complete home electrical repair service outside coverage.",
+    priceBdt: 1500, coverImageUrl: null, districtCode: "chattogram",
+    areaLabels: ["Agrabad"], areaKeys: ["agrabad"],
+    searchTokens: ["electrical", "repair"], status: "active",
+    createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
+  }));
+});
+
+test("blocking requires a shared booking and prevents stale booking creation", { skip: !emulatorAvailable }, async () => {
+  const firestore = customerDb();
+  await assertFails(setDoc(doc(firestore, "blocks/customer/users/stranger"), {
+    blockedUid: "stranger", displayNameSnapshot: "Stranger User",
+    bookingId: "accepted", createdAt: serverTimestamp(),
+  }));
+  await assertSucceeds(setDoc(doc(firestore, "blocks/customer/users/provider"), {
+    blockedUid: "provider", displayNameSnapshot: "Provider User",
+    bookingId: "accepted", createdAt: serverTimestamp(),
+  }));
+  const batch = writeBatch(firestore);
+  batch.set(doc(firestore, "bookings/blocked-booking"), {
+    ...bookingData("pending", {
+      lastEventId: "blocked-event", createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    }),
+  });
+  batch.set(doc(firestore, "bookings/blocked-booking/private/contact"), {
+    customerPhone: "+8801700000001", providerPhone: "",
+    address: "House 20, Dhanmondi, Dhaka", landmark: "Near lake",
+  });
+  batch.set(doc(firestore, "bookings/blocked-booking/events/blocked-event"), {
+    type: "pending", actorId: "customer", createdAt: serverTimestamp(),
+  });
+  await assertFails(batch.commit());
 });

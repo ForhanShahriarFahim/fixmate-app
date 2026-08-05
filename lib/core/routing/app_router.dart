@@ -23,25 +23,11 @@ final appRouterProvider = Provider<GoRouter>((ref) {
     refreshListenable: notifier,
     redirect: (context, state) {
       final user = auth.currentUser;
-      final location = state.matchedLocation;
-      final public =
-          location == '/login' ||
-          location == '/register' ||
-          location == '/forgot-password' ||
-          location.startsWith('/legal/');
-      if (user == null && !public) return '/login';
-      if (user != null &&
-          !user.emailVerified &&
-          location != '/verify-email' &&
-          !location.startsWith('/legal/')) {
-        return '/verify-email';
-      }
-      if (user != null &&
-          user.emailVerified &&
-          <String>{'/login', '/register', '/verify-email'}.contains(location)) {
-        return '/';
-      }
-      return null;
+      return resolveAuthRedirect(
+        signedIn: user != null,
+        emailVerified: user?.emailVerified == true,
+        location: state.matchedLocation,
+      );
     },
     errorBuilder: (context, state) => Scaffold(
       appBar: AppBar(title: const Text('FixMate')),
@@ -96,6 +82,19 @@ final appRouterProvider = Provider<GoRouter>((ref) {
         ),
       ),
       GoRoute(
+        path: '/provider/:providerId',
+        builder: (context, state) => _AccountGuard(
+          child: PublicProviderProfileScreen(
+            providerId: state.pathParameters['providerId']!,
+          ),
+        ),
+      ),
+      GoRoute(
+        path: '/settings/blocked-users',
+        builder: (context, state) =>
+            const _AccountGuard(child: BlockedUsersScreen()),
+      ),
+      GoRoute(
         path: '/service/:serviceId',
         builder: (context, state) => _AccountGuard(
           child: ServiceDetailScreen(
@@ -134,6 +133,31 @@ final appRouterProvider = Provider<GoRouter>((ref) {
     ],
   );
 });
+
+String? resolveAuthRedirect({
+  required bool signedIn,
+  required bool emailVerified,
+  required String location,
+}) {
+  final public =
+      location == '/login' ||
+      location == '/register' ||
+      location == '/forgot-password' ||
+      location.startsWith('/legal/');
+  if (!signedIn && !public) return '/login';
+  if (signedIn &&
+      !emailVerified &&
+      location != '/verify-email' &&
+      !location.startsWith('/legal/')) {
+    return '/verify-email';
+  }
+  if (signedIn &&
+      emailVerified &&
+      <String>{'/login', '/register', '/verify-email'}.contains(location)) {
+    return '/';
+  }
+  return null;
+}
 
 class _RoleGuard extends ConsumerWidget {
   const _RoleGuard({required this.expectedRole, required this.child});

@@ -19,6 +19,14 @@ export type PaymentStatus = "unpaid" | "paidCash" | "disputed";
 export type ReportTarget = "user" | "message";
 export type ReportStatus = "open" | "reviewing" | "resolved" | "dismissed";
 export type NotificationType = "booking" | "message" | "review" | "moderation" | "account";
+export type DeletionRequestStatus = "requested" | "cleanupInProgress" | "cleanupFailed" | "completed";
+
+export const userReportReasons = new Set([
+  "harassment", "fraud", "spam", "unsafe_behavior", "other",
+] as const);
+export const messageReportReasons = new Set([
+  "abusive_content", "harassment", "spam", "fraud", "objectionable_content", "other",
+] as const);
 
 export const terminalStatuses = new Set<BookingStatus>([
   "rejected",

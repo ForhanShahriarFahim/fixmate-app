@@ -10,6 +10,7 @@ coverage/
 
 # Android / IDE
 android/.gradle/
+android/.kotlin/
 android/local.properties
 android/key.properties
 *.jks

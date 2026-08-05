@@ -18,18 +18,36 @@ Future<void> main() async {
     return;
   }
 
-  await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
-  if (!kIsWeb) {
-    await FirebaseAppCheck.instance.activate(
-      providerAndroid: kDebugMode
-          ? const AndroidDebugProvider()
-          : const AndroidPlayIntegrityProvider(),
+  try {
+    await Firebase.initializeApp(
+      options: DefaultFirebaseOptions.currentPlatform,
     );
-    FlutterError.onError = FirebaseCrashlytics.instance.recordFlutterFatalError;
-    PlatformDispatcher.instance.onError = (Object error, StackTrace stack) {
-      FirebaseCrashlytics.instance.recordError(error, stack, fatal: true);
-      return true;
-    };
+    if (!kIsWeb) {
+      await FirebaseAppCheck.instance.activate(
+        providerAndroid: kDebugMode
+            ? const AndroidDebugProvider()
+            : const AndroidPlayIntegrityProvider(),
+      );
+      FlutterError.onError =
+          FirebaseCrashlytics.instance.recordFlutterFatalError;
+      PlatformDispatcher.instance.onError = (Object error, StackTrace stack) {
+        FirebaseCrashlytics.instance.recordError(error, stack, fatal: true);
+        return true;
+      };
+    }
+  } catch (error, stack) {
+    debugPrint('FixMate Firebase initialization failed: $error');
+    debugPrintStack(stackTrace: stack);
+    runApp(
+      const ProviderScope(
+        child: FixMateApp(
+          firebaseConfigured: false,
+          firebaseSetupMessage:
+              'FixMate could not safely connect to Firebase. Check the Android app registration, generated Firebase options, google-services.json, network connection, and App Check setup, then rebuild the app.',
+        ),
+      ),
+    );
+    return;
   }
 
   runZonedGuarded(

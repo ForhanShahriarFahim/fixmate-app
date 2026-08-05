@@ -6,6 +6,7 @@ import 'package:fixmate/core/data/firebase_providers.dart';
 import 'package:fixmate/core/domain/models.dart';
 import 'package:fixmate/core/locations/bangladesh_locations.dart';
 import 'package:fixmate/core/utils/error_messages.dart';
+import 'package:fixmate/core/utils/formatters.dart';
 import 'package:fixmate/core/utils/validators.dart';
 import 'package:fixmate/core/widgets/common_widgets.dart';
 import 'package:fixmate/features/catalog/catalog_screens.dart';
@@ -130,6 +131,17 @@ class _ProviderOnboardingScreenState
                   const Text(
                     'Tell customers about your experience. An administrator will review your profile and phone number.',
                   ),
+                  if (widget.existing?.isBookable == true) ...[
+                    const SizedBox(height: 12),
+                    const Card(
+                      child: Padding(
+                        padding: EdgeInsets.all(16),
+                        child: Text(
+                          'Saving any public provider change temporarily removes your services from the FixMate interface until an administrator approves the updated profile.',
+                        ),
+                      ),
+                    ),
+                  ],
                   const SizedBox(height: 20),
                   TextFormField(
                     controller: _name,
@@ -311,41 +323,37 @@ class ProviderDashboardScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final user = ref.watch(currentUserProfileProvider).value;
     if (user == null) return const LoadingView();
+    final repository = ref.read(marketplaceRepositoryProvider);
     return Scaffold(
       appBar: AppBar(
         title: Text('Hello, ${user.displayName.split(' ').first}'),
       ),
-      body: StreamBuilder<List<ServiceReview>>(
-        stream: ref
-            .read(marketplaceRepositoryProvider)
-            .watchProviderReviews(user.id),
-        builder: (context, reviewSnapshot) {
-          final reviews = reviewSnapshot.data ?? const <ServiceReview>[];
-          final average = reviews.isEmpty
-              ? 0.0
-              : reviews.fold<int>(0, (total, review) => total + review.rating) /
-                    reviews.length;
-          return StreamBuilder<List<Booking>>(
-            stream: ref
-                .read(marketplaceRepositoryProvider)
-                .watchBookings(uid: user.id, role: UserRole.provider),
+      body: FutureBuilder<ReviewSummary>(
+        future: repository.getProviderReviewSummary(user.id),
+        builder: (context, reviewSnapshot) => FutureBuilder<ProviderDashboardStats>(
+          future: repository.getProviderDashboardStats(user.id),
+          builder: (context, statsSnapshot) => StreamBuilder<List<Booking>>(
+            stream: repository.watchBookings(
+              uid: user.id,
+              role: UserRole.provider,
+              limit: 20,
+            ),
             builder: (context, bookingSnapshot) {
-              final bookings = bookingSnapshot.data ?? const <Booking>[];
-              final pending = bookings
-                  .where((item) => item.status == BookingStatus.pending)
-                  .length;
-              final active = bookings
-                  .where(
-                    (item) => <BookingStatus>{
-                      BookingStatus.accepted,
-                      BookingStatus.inProgress,
-                      BookingStatus.completionRequested,
-                    }.contains(item.status),
-                  )
-                  .length;
-              final completed = bookings
-                  .where((item) => item.status == BookingStatus.completed)
-                  .length;
+              if (reviewSnapshot.hasError || statsSnapshot.hasError) {
+                return ErrorView(
+                  message: friendlyError(
+                    reviewSnapshot.error ?? statsSnapshot.error!,
+                  ),
+                );
+              }
+              if (!reviewSnapshot.hasData ||
+                  !statsSnapshot.hasData ||
+                  !bookingSnapshot.hasData) {
+                return const LoadingView();
+              }
+              final reviews = reviewSnapshot.data!;
+              final stats = statsSnapshot.data!;
+              final bookings = bookingSnapshot.data!;
               return ListView(
                 padding: const EdgeInsets.all(18),
                 children: [
@@ -359,11 +367,13 @@ class ProviderDashboardScreen extends ConsumerWidget {
                           const Text('Your reputation'),
                           const SizedBox(height: 8),
                           Text(
-                            '${average.toStringAsFixed(1)} ★',
+                            reviews.hasReviews
+                                ? '${reviews.average!.toStringAsFixed(1)} ★'
+                                : 'No verified rating yet',
                             style: Theme.of(context).textTheme.headlineMedium,
                           ),
                           Text(
-                            '${reviews.length} reviews • $completed completed jobs',
+                            '${reviews.count} reviews • ${stats.completed} completed jobs',
                           ),
                         ],
                       ),
@@ -375,7 +385,7 @@ class ProviderDashboardScreen extends ConsumerWidget {
                       Expanded(
                         child: _StatCard(
                           label: 'New requests',
-                          value: pending,
+                          value: stats.pending,
                           icon: Icons.notifications_active_outlined,
                         ),
                       ),
@@ -383,7 +393,7 @@ class ProviderDashboardScreen extends ConsumerWidget {
                       Expanded(
                         child: _StatCard(
                           label: 'Active jobs',
-                          value: active,
+                          value: stats.active,
                           icon: Icons.handyman_outlined,
                         ),
                       ),
@@ -395,9 +405,7 @@ class ProviderDashboardScreen extends ConsumerWidget {
                     style: Theme.of(context).textTheme.titleLarge,
                   ),
                   const SizedBox(height: 8),
-                  if (!bookingSnapshot.hasData)
-                    const LinearProgressIndicator()
-                  else if (bookings.isEmpty)
+                  if (bookings.isEmpty)
                     const SizedBox(
                       height: 220,
                       child: EmptyView(
@@ -416,7 +424,10 @@ class ProviderDashboardScreen extends ConsumerWidget {
                                   context.push('/booking/${booking.id}'),
                               title: Text(booking.serviceTitle),
                               subtitle: Text(
-                                '${booking.scheduleDateKey} • ${booking.timeWindow.name}',
+                                formatBookingSchedule(
+                                  booking.scheduleDateKey,
+                                  booking.timeWindow,
+                                ),
                               ),
                               trailing: BookingStatusChip(
                                 status: booking.status,
@@ -427,8 +438,8 @@ class ProviderDashboardScreen extends ConsumerWidget {
                 ],
               );
             },
-          );
-        },
+          ),
+        ),
       ),
     );
   }
@@ -460,31 +471,34 @@ class _StatCard extends StatelessWidget {
   );
 }
 
-class ProviderServicesScreen extends ConsumerWidget {
+class ProviderServicesScreen extends ConsumerStatefulWidget {
   const ProviderServicesScreen({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<ProviderServicesScreen> createState() =>
+      _ProviderServicesScreenState();
+}
+
+class _ProviderServicesScreenState
+    extends ConsumerState<ProviderServicesScreen> {
+  int _limit = 50;
+
+  @override
+  Widget build(BuildContext context) {
     final user = ref.watch(currentUserProfileProvider).value;
     if (user == null) return const LoadingView();
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('My services'),
-        actions: [
-          IconButton(
-            onPressed: () => context.push('/provider/service-editor'),
-            icon: const Icon(Icons.add),
-            tooltip: 'Add service',
-          ),
-        ],
-      ),
+      appBar: AppBar(title: const Text('My services')),
       body: StreamBuilder<List<ServiceListing>>(
         stream: ref
             .read(marketplaceRepositoryProvider)
-            .watchProviderServices(user.id),
+            .watchProviderServices(user.id, limit: _limit),
         builder: (context, snapshot) {
           if (snapshot.hasError) {
-            return ErrorView(message: friendlyError(snapshot.error!));
+            return ErrorView(
+              message: friendlyError(snapshot.error!),
+              onRetry: () => setState(() {}),
+            );
           }
           if (!snapshot.hasData) return const LoadingView();
           if (snapshot.data!.isEmpty) {
@@ -497,8 +511,16 @@ class ProviderServicesScreen extends ConsumerWidget {
           }
           return ListView.builder(
             padding: const EdgeInsets.all(16),
-            itemCount: snapshot.data!.length,
+            itemCount:
+                snapshot.data!.length +
+                (snapshot.data!.length >= _limit ? 1 : 0),
             itemBuilder: (context, index) {
+              if (index == snapshot.data!.length) {
+                return OutlinedButton(
+                  onPressed: () => setState(() => _limit += 50),
+                  child: const Text('Load more services'),
+                );
+              }
               final service = snapshot.data![index];
               return ServiceCard(service: service).withEdit(
                 context,
@@ -578,7 +600,6 @@ class _ServiceEditorScreenState extends ConsumerState<ServiceEditorScreen> {
       await repository.saveService(
         serviceId: widget.service?.id,
         providerId: user.id,
-        providerName: provider.publicName,
         categoryId: _categoryId!,
         title: _title.text,
         description: _description.text,
@@ -609,8 +630,7 @@ class _ServiceEditorScreenState extends ConsumerState<ServiceEditorScreen> {
         loading: () => const LoadingView(),
         error: (error, stack) => ErrorView(message: friendlyError(error)),
         data: (profile) {
-          if (profile == null ||
-              profile.approvalStatus != ProviderApprovalStatus.approved) {
+          if (profile == null || !profile.isBookable) {
             return const ErrorView(message: 'Provider approval is required.');
           }
           return categories.when(

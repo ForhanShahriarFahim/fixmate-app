@@ -13,6 +13,12 @@ String friendlyError(Object error) {
         return 'Choose a stronger password.';
       case 'too-many-requests':
         return 'Too many attempts. Please wait and try again.';
+      case 'network-request-failed':
+        return 'No internet connection. Check your network and try again.';
+      case 'user-disabled':
+        return 'This account has been disabled. Contact FixMate support.';
+      case 'requires-recent-login':
+        return 'For security, sign out and sign in again before continuing.';
       default:
         return error.message ?? 'Authentication failed.';
     }
@@ -24,8 +30,13 @@ String friendlyError(Object error) {
       'failed-precondition' =>
         'The action cannot be completed in the current state.',
       'already-exists' => 'That record already exists.',
+      'unauthenticated' => 'Your session expired. Sign in again to continue.',
       'aborted' => 'The data changed. Please try the action again.',
       'unavailable' => 'Firebase is temporarily unavailable. Try again.',
+      'deadline-exceeded' =>
+        'The network request timed out. Check your connection and retry.',
+      'resource-exhausted' =>
+        'FixMate is temporarily busy. Wait a moment and try again.',
       _ => error.message ?? 'The requested action could not be completed.',
     };
   }

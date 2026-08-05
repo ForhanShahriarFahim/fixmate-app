@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 
 class FirebaseSetupRequiredScreen extends StatelessWidget {
-  const FirebaseSetupRequiredScreen({super.key});
+  const FirebaseSetupRequiredScreen({this.message, super.key});
+
+  final String? message;
 
   @override
   Widget build(BuildContext context) => Scaffold(
@@ -25,10 +27,11 @@ class FirebaseSetupRequiredScreen extends StatelessWidget {
                   style: Theme.of(context).textTheme.headlineSmall,
                 ),
                 const SizedBox(height: 12),
-                const Text(
-                  'The application code is ready, but Firebase client values are placeholders. '
-                  'In FlutLab, choose Connect to Firebase, upload google-services.json, and replace '
-                  'lib/core/firebase/firebase_options.dart with the generated values.',
+                Text(
+                  message ??
+                      'Firebase client configuration is missing or invalid. '
+                          'In FlutLab, choose Connect to Firebase, upload the matching google-services.json, '
+                          'regenerate lib/core/firebase/firebase_options.dart for Android, and rebuild FixMate.',
                   textAlign: TextAlign.center,
                 ),
                 const SizedBox(height: 20),

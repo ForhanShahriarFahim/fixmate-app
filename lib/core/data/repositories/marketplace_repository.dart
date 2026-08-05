@@ -1,5 +1,8 @@
+import 'dart:async';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:fixmate/core/data/repositories/marketplace_policies.dart';
 import 'package:fixmate/core/domain/models.dart';
 import 'package:fixmate/core/utils/validators.dart';
 
@@ -29,6 +32,7 @@ class MarketplaceRepository {
   Stream<List<ServiceListing>> watchServices({
     String? categoryId,
     String? districtCode,
+    int limit = 20,
   }) {
     Query<Map<String, dynamic>> query = _firestore
         .collection('services')
@@ -39,14 +43,91 @@ class MarketplaceRepository {
     if (districtCode != null && districtCode.isNotEmpty) {
       query = query.where('districtCode', isEqualTo: districtCode);
     }
-    return query
-        .limit(100)
-        .snapshots()
-        .map(
-          (snapshot) => snapshot.docs
+    return _watchEligibleServices(query.limit(limit.clamp(1, 100)));
+  }
+
+  Stream<List<ServiceListing>> watchProviderPublicServices(
+    String providerId, {
+    int limit = 20,
+  }) => _watchEligibleServices(
+    _firestore
+        .collection('services')
+        .where('providerId', isEqualTo: providerId)
+        .where('status', isEqualTo: ServiceStatus.active.name)
+        .limit(limit.clamp(1, 100)),
+  );
+
+  Stream<List<ServiceListing>> _watchEligibleServices(
+    Query<Map<String, dynamic>> query,
+  ) {
+    late final StreamController<List<ServiceListing>> controller;
+    StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? serviceSub;
+    final profileSubs =
+        <String, StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>>{};
+    final eligibility = <String, bool>{};
+    var services = const <ServiceListing>[];
+
+    void emit() {
+      if (controller.isClosed) return;
+      controller.add(
+        services
+            .where((service) => eligibility[service.providerId] == true)
+            .toList(growable: false),
+      );
+    }
+
+    Future<void> syncProviders(Set<String> providerIds) async {
+      final removed = profileSubs.keys
+          .where((providerId) => !providerIds.contains(providerId))
+          .toList(growable: false);
+      for (final providerId in removed) {
+        await profileSubs.remove(providerId)?.cancel();
+        eligibility.remove(providerId);
+      }
+      for (final providerId in providerIds) {
+        if (profileSubs.containsKey(providerId)) continue;
+        eligibility[providerId] = false;
+        profileSubs[providerId] = _firestore
+            .collection('provider_profiles')
+            .doc(providerId)
+            .snapshots()
+            .listen(
+              (snapshot) {
+                eligibility[providerId] =
+                    snapshot.exists &&
+                    ProviderProfile.fromDocument(snapshot).isBookable;
+                emit();
+              },
+              onError: (Object _) {
+                eligibility[providerId] = false;
+                emit();
+              },
+            );
+      }
+      emit();
+    }
+
+    controller = StreamController<List<ServiceListing>>(
+      onListen: () {
+        serviceSub = query.snapshots().listen((snapshot) {
+          services = snapshot.docs
               .map(ServiceListing.fromDocument)
-              .toList(growable: false),
-        );
+              .toList(growable: false);
+          unawaited(
+            syncProviders(
+              services.map((service) => service.providerId).toSet(),
+            ),
+          );
+        }, onError: controller.addError);
+      },
+      onCancel: () async {
+        await serviceSub?.cancel();
+        for (final subscription in profileSubs.values) {
+          await subscription.cancel();
+        }
+      },
+    );
+    return controller.stream;
   }
 
   Stream<ServiceListing?> watchService(String serviceId) => _firestore
@@ -58,17 +139,20 @@ class MarketplaceRepository {
             snapshot.exists ? ServiceListing.fromDocument(snapshot) : null,
       );
 
-  Stream<List<ServiceListing>> watchProviderServices(String providerId) =>
-      _firestore
-          .collection('services')
-          .where('providerId', isEqualTo: providerId)
-          .orderBy('updatedAt', descending: true)
-          .snapshots()
-          .map(
-            (snapshot) => snapshot.docs
-                .map(ServiceListing.fromDocument)
-                .toList(growable: false),
-          );
+  Stream<List<ServiceListing>> watchProviderServices(
+    String providerId, {
+    int limit = 50,
+  }) => _firestore
+      .collection('services')
+      .where('providerId', isEqualTo: providerId)
+      .orderBy('updatedAt', descending: true)
+      .limit(limit.clamp(1, 100))
+      .snapshots()
+      .map(
+        (snapshot) => snapshot.docs
+            .map(ServiceListing.fromDocument)
+            .toList(growable: false),
+      );
 
   Future<void> saveProviderProfile({
     required String providerId,
@@ -83,11 +167,10 @@ class MarketplaceRepository {
         .collection('provider_profiles')
         .doc(providerId);
     final existing = await reference.get();
-    final labels = serviceAreas
-        .map((value) => value.trim())
-        .where((value) => value.isNotEmpty)
-        .toSet()
-        .toList();
+    final labels = _normalizedLabels(serviceAreas);
+    if (labels.isEmpty || labels.length > 10) {
+      throw ArgumentError('Enter between 1 and 10 unique service areas.');
+    }
     final payload = <String, dynamic>{
       'providerId': providerId,
       'publicName': publicName.trim(),
@@ -100,14 +183,14 @@ class MarketplaceRepository {
       'serviceAreaKeys': labels
           .map(Validators.normalizeKey)
           .toList(growable: false),
+      // Any coverage or identity edit requires a fresh console review. The
+      // provider can never make this profile publicly bookable.
+      'approvalStatus': ProviderApprovalStatus.pending.name,
+      'marketplaceVisible': false,
       'updatedAt': FieldValue.serverTimestamp(),
     };
     if (!existing.exists) {
       payload.addAll(<String, dynamic>{
-        'approvalStatus': ProviderApprovalStatus.pending.name,
-        'ratingAverage': 0.0,
-        'reviewCount': 0,
-        'completedBookings': 0,
         'createdAt': FieldValue.serverTimestamp(),
       });
     }
@@ -117,7 +200,6 @@ class MarketplaceRepository {
   Future<String> saveService({
     String? serviceId,
     required String providerId,
-    required String providerName,
     required String categoryId,
     required String title,
     required String description,
@@ -126,6 +208,26 @@ class MarketplaceRepository {
     required List<String> areaLabels,
     required ServiceStatus status,
   }) async {
+    final profileSnapshot = await _firestore
+        .collection('provider_profiles')
+        .doc(providerId)
+        .get();
+    if (!profileSnapshot.exists) {
+      throw StateError('Complete your provider profile first.');
+    }
+    final profile = ProviderProfile.fromDocument(profileSnapshot);
+    if (profile.providerId != providerId || !profile.isBookable) {
+      throw StateError('Provider approval is required to manage services.');
+    }
+    final labels = _normalizedLabels(areaLabels);
+    final keys = labels.map(Validators.normalizeKey).toList(growable: false);
+    if (districtCode != profile.districtCode ||
+        !_sameStrings(labels, profile.serviceAreaLabels) ||
+        !_sameStrings(keys, profile.serviceAreaKeys)) {
+      throw ArgumentError(
+        'Service coverage must match the currently approved provider profile.',
+      );
+    }
     final reference = serviceId == null
         ? _firestore.collection('services').doc()
         : _firestore.collection('services').doc(serviceId);
@@ -138,27 +240,21 @@ class MarketplaceRepository {
         .toList();
     final payload = <String, dynamic>{
       'providerId': providerId,
-      'providerName': providerName.trim(),
+      'providerName': profile.publicName,
       'categoryId': categoryId,
       'title': title.trim(),
       'description': description.trim(),
       'priceBdt': priceBdt,
       'coverImageUrl': null,
       'districtCode': districtCode,
-      'areaLabels': areaLabels,
-      'areaKeys': areaLabels
-          .map(Validators.normalizeKey)
-          .toList(growable: false),
+      'areaLabels': labels,
+      'areaKeys': keys,
       'searchTokens': tokens,
       'status': status.name,
       'updatedAt': FieldValue.serverTimestamp(),
     };
     if (serviceId == null) {
-      payload.addAll(<String, dynamic>{
-        'providerRating': 0.0,
-        'reviewCount': 0,
-        'createdAt': FieldValue.serverTimestamp(),
-      });
+      payload['createdAt'] = FieldValue.serverTimestamp();
     }
     await reference.set(payload, SetOptions(merge: true));
     return reference.id;
@@ -167,13 +263,14 @@ class MarketplaceRepository {
   Stream<List<Booking>> watchBookings({
     required String uid,
     required UserRole role,
+    int limit = 50,
   }) {
     final field = role == UserRole.customer ? 'customerId' : 'providerId';
     return _firestore
         .collection('bookings')
         .where(field, isEqualTo: uid)
         .orderBy('createdAt', descending: true)
-        .limit(100)
+        .limit(limit.clamp(1, 100))
         .snapshots()
         .map(
           (snapshot) =>
@@ -213,30 +310,104 @@ class MarketplaceRepository {
             .toList(growable: false),
       );
 
-  Stream<List<ChatMessage>> watchMessages(String bookingId) => _firestore
-      .collection('bookings')
-      .doc(bookingId)
-      .collection('messages')
-      .orderBy('createdAt')
-      .limitToLast(200)
-      .snapshots()
-      .map(
-        (snapshot) =>
-            snapshot.docs.map(ChatMessage.fromDocument).toList(growable: false),
-      );
-
-  Stream<List<ServiceReview>> watchProviderReviews(String providerId) =>
+  Stream<List<ChatMessage>> watchMessages(String bookingId, {int limit = 50}) =>
       _firestore
-          .collection('reviews')
-          .where('providerId', isEqualTo: providerId)
-          .orderBy('createdAt', descending: true)
-          .limit(50)
+          .collection('bookings')
+          .doc(bookingId)
+          .collection('messages')
+          .orderBy('createdAt')
+          .limitToLast(limit.clamp(1, 200))
           .snapshots()
           .map(
             (snapshot) => snapshot.docs
-                .map(ServiceReview.fromDocument)
+                .map(ChatMessage.fromDocument)
                 .toList(growable: false),
           );
+
+  Stream<List<ServiceReview>> watchProviderReviews(
+    String providerId, {
+    int limit = 20,
+  }) => _firestore
+      .collection('reviews')
+      .where('providerId', isEqualTo: providerId)
+      .orderBy('createdAt', descending: true)
+      .limit(limit.clamp(1, 100))
+      .snapshots()
+      .map(
+        (snapshot) => snapshot.docs
+            .map(ServiceReview.fromDocument)
+            .toList(growable: false),
+      );
+
+  Future<ReviewSummary> getProviderReviewSummary(String providerId) async {
+    final snapshot = await _firestore
+        .collection('reviews')
+        .where('providerId', isEqualTo: providerId)
+        .aggregate(count(), average('rating'))
+        .get();
+    final reviewCount = snapshot.count ?? 0;
+    return ReviewSummary(
+      count: reviewCount,
+      average: reviewCount == 0 ? null : snapshot.getAverage('rating'),
+    );
+  }
+
+  Future<ProviderDashboardStats> getProviderDashboardStats(
+    String providerId,
+  ) async {
+    final bookings = _firestore
+        .collection('bookings')
+        .where('providerId', isEqualTo: providerId);
+    final results = await Future.wait([
+      bookings
+          .where('status', isEqualTo: BookingStatus.pending.name)
+          .count()
+          .get(),
+      bookings
+          .where(
+            'status',
+            whereIn: <String>[
+              BookingStatus.accepted.name,
+              BookingStatus.inProgress.name,
+              BookingStatus.completionRequested.name,
+            ],
+          )
+          .count()
+          .get(),
+      bookings
+          .where('status', isEqualTo: BookingStatus.completed.name)
+          .count()
+          .get(),
+    ]);
+    return ProviderDashboardStats(
+      pending: results[0].count ?? 0,
+      active: results[1].count ?? 0,
+      completed: results[2].count ?? 0,
+    );
+  }
+
+  Stream<List<BlockedUser>> watchBlockedUsers(String uid, {int limit = 50}) =>
+      _firestore
+          .collection('blocks')
+          .doc(uid)
+          .collection('users')
+          .orderBy('createdAt', descending: true)
+          .limit(limit.clamp(1, 100))
+          .snapshots()
+          .map(
+            (snapshot) => snapshot.docs
+                .map(BlockedUser.fromDocument)
+                .toList(growable: false),
+          );
+
+  Stream<DeletionRequest?> watchDeletionRequest(String uid) => _firestore
+      .collection('deletion_requests')
+      .doc(uid)
+      .snapshots()
+      .map(
+        (snapshot) =>
+            snapshot.exists ? DeletionRequest.fromDocument(snapshot) : null,
+      );
 
   Stream<List<FixMateNotification>> watchActivity({
     required String uid,
@@ -378,11 +549,27 @@ class MarketplaceRepository {
       final providerRef = _firestore
           .collection('provider_profiles')
           .doc(providerId);
+      final outgoingBlockRef = _firestore
+          .collection('blocks')
+          .doc(authUser.uid)
+          .collection('users')
+          .doc(providerId);
+      final incomingBlockRef = _firestore
+          .collection('blocks')
+          .doc(providerId)
+          .collection('users')
+          .doc(authUser.uid);
       final providerSnapshot = await transaction.get(providerRef);
+      final outgoingBlock = await transaction.get(outgoingBlockRef);
+      final incomingBlock = await transaction.get(incomingBlockRef);
       if (!providerSnapshot.exists ||
-          providerSnapshot.data()?['approvalStatus'] !=
-              ProviderApprovalStatus.approved.name) {
+          !ProviderProfile.fromDocument(providerSnapshot).isBookable) {
         throw StateError('This provider is not currently approved.');
+      }
+      if (outgoingBlock.exists || incomingBlock.exists) {
+        throw StateError(
+          'A booking cannot be created while either participant is blocked.',
+        );
       }
       final provider = providerSnapshot.data()!;
       final areaKeys = List<String>.from(
@@ -466,9 +653,19 @@ class MarketplaceRepository {
     await _firestore.runTransaction((transaction) async {
       final bookingSnapshot = await transaction.get(bookingRef);
       final userRef = _firestore.collection('users').doc(user.uid);
+      final providerProfileRef = _firestore
+          .collection('provider_profiles')
+          .doc(user.uid);
       final userSnapshot = await transaction.get(userRef);
-      if (!bookingSnapshot.exists || !userSnapshot.exists) {
+      final providerProfileSnapshot = await transaction.get(providerProfileRef);
+      if (!bookingSnapshot.exists ||
+          !userSnapshot.exists ||
+          !providerProfileSnapshot.exists) {
         throw StateError('The booking or provider account is unavailable.');
+      }
+      if (userSnapshot.data()?['status'] != AccountStatus.active.name ||
+          !ProviderProfile.fromDocument(providerProfileSnapshot).isBookable) {
+        throw StateError('Your provider account is not currently eligible.');
       }
       final booking = bookingSnapshot.data()!;
       if (booking['providerId'] != user.uid ||
@@ -530,7 +727,14 @@ class MarketplaceRepository {
     final eventRef = bookingRef.collection('events').doc();
     await _firestore.runTransaction((transaction) async {
       final snapshot = await transaction.get(bookingRef);
+      final actorSnapshot = await transaction.get(
+        _firestore.collection('users').doc(user.uid),
+      );
       if (!snapshot.exists) throw StateError('Booking not found.');
+      if (!actorSnapshot.exists ||
+          actorSnapshot.data()?['status'] != AccountStatus.active.name) {
+        throw StateError('Your account is not active.');
+      }
       final booking = snapshot.data()!;
       final actorField = actor == UserRole.customer
           ? 'customerId'
@@ -538,6 +742,15 @@ class MarketplaceRepository {
       if (booking[actorField] != user.uid ||
           booking['status'] != expected.name) {
         throw StateError('This booking cannot perform that transition.');
+      }
+      if (actor == UserRole.provider) {
+        final profileSnapshot = await transaction.get(
+          _firestore.collection('provider_profiles').doc(user.uid),
+        );
+        if (!profileSnapshot.exists ||
+            !ProviderProfile.fromDocument(profileSnapshot).isBookable) {
+          throw StateError('Your provider account is not currently eligible.');
+        }
       }
       transaction.update(bookingRef, <String, dynamic>{
         'status': next.name,
@@ -667,6 +880,7 @@ class MarketplaceRepository {
         ? data['providerId'] as String
         : data['customerId'] as String;
     final results = await Future.wait([
+      _firestore.collection('users').doc(user.uid).get(),
       _firestore
           .collection('blocks')
           .doc(user.uid)
@@ -680,9 +894,15 @@ class MarketplaceRepository {
           .doc(user.uid)
           .get(),
     ]);
+    if (!results.first.exists ||
+        results.first.data()?['status'] != AccountStatus.active.name) {
+      return _result(bookingId, 'unavailable');
+    }
     return _result(
       bookingId,
-      results.any((snapshot) => snapshot.exists) ? 'blocked' : 'allowed',
+      results.skip(1).any((snapshot) => snapshot.exists)
+          ? 'blocked'
+          : 'allowed',
     );
   }
 
@@ -712,6 +932,7 @@ class MarketplaceRepository {
         ? booking['providerId'] as String
         : booking['customerId'] as String;
     final blocks = await Future.wait([
+      _firestore.collection('users').doc(user.uid).get(),
       _firestore
           .collection('blocks')
           .doc(user.uid)
@@ -725,7 +946,11 @@ class MarketplaceRepository {
           .doc(user.uid)
           .get(),
     ]);
-    if (blocks.any((snapshot) => snapshot.exists)) {
+    if (!blocks.first.exists ||
+        blocks.first.data()?['status'] != AccountStatus.active.name) {
+      throw StateError('Your account is not active.');
+    }
+    if (blocks.skip(1).any((snapshot) => snapshot.exists)) {
       throw StateError(
         'Messaging is unavailable because one participant blocked the other.',
       );
@@ -794,8 +1019,12 @@ class MarketplaceRepository {
     final targetId = _requiredString(input, 'targetId');
     final reason = _requiredString(input, 'reason');
     final details = (input['details'] as String? ?? '').trim();
-    if (!<String>{'user', 'message'}.contains(targetType) ||
-        details.length > 1000) {
+    final target = _enumValue(ReportTarget.values, targetType, 'report target');
+    if (!MarketplacePolicies.isValidReport(
+      target: target,
+      reason: reason,
+      details: details,
+    )) {
       throw ArgumentError('The report details are invalid.');
     }
     final booking = await _firestore
@@ -825,19 +1054,31 @@ class MarketplaceRepository {
         throw ArgumentError('The reported message is invalid.');
       }
     }
-    final reference = _firestore.collection('reports').doc();
-    await reference.set(<String, dynamic>{
-      'reporterId': user.uid,
-      'targetType': targetType,
-      'targetId': targetId,
-      'targetUserId': otherUid,
-      'bookingId': bookingId,
-      'reason': reason,
-      'details': details,
-      'status': ReportStatus.open.name,
-      'moderationNotes': '',
-      'createdAt': FieldValue.serverTimestamp(),
-      'updatedAt': FieldValue.serverTimestamp(),
+    final reportId = MarketplacePolicies.reportDocumentId(
+      reporterId: user.uid,
+      bookingId: bookingId,
+      target: target,
+      targetId: targetId,
+    );
+    final reference = _firestore.collection('reports').doc(reportId);
+    await _firestore.runTransaction((transaction) async {
+      final existing = await transaction.get(reference);
+      if (existing.exists) {
+        throw StateError('You have already reported this item.');
+      }
+      transaction.set(reference, <String, dynamic>{
+        'reporterId': user.uid,
+        'targetType': targetType,
+        'targetId': targetId,
+        'targetUserId': otherUid,
+        'bookingId': bookingId,
+        'reason': reason,
+        'details': details,
+        'status': ReportStatus.open.name,
+        'moderationNotes': '',
+        'createdAt': FieldValue.serverTimestamp(),
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
     });
     return _result(reference.id, ReportStatus.open.name);
   }
@@ -857,9 +1098,31 @@ class MarketplaceRepository {
         .collection('users')
         .doc(targetUid);
     if (blocked) {
-      await reference.set(<String, dynamic>{
-        'blockedUid': targetUid,
-        'createdAt': FieldValue.serverTimestamp(),
+      final bookingId = _requiredString(input, 'bookingId');
+      final bookingRef = _firestore.collection('bookings').doc(bookingId);
+      await _firestore.runTransaction((transaction) async {
+        final bookingSnapshot = await transaction.get(bookingRef);
+        if (!bookingSnapshot.exists) throw StateError('Booking not found.');
+        final booking = bookingSnapshot.data()!;
+        if (booking['customerId'] != user.uid &&
+            booking['providerId'] != user.uid) {
+          throw StateError('You are not a participant in this booking.');
+        }
+        final otherUid = booking['customerId'] == user.uid
+            ? booking['providerId'] as String
+            : booking['customerId'] as String;
+        if (otherUid != targetUid) {
+          throw ArgumentError('Only the other participant can be blocked.');
+        }
+        final displayName = booking['customerId'] == targetUid
+            ? booking['customerName'] as String? ?? 'FixMate user'
+            : booking['providerName'] as String? ?? 'FixMate user';
+        transaction.set(reference, <String, dynamic>{
+          'blockedUid': targetUid,
+          'displayNameSnapshot': displayName,
+          'bookingId': bookingId,
+          'createdAt': FieldValue.serverTimestamp(),
+        });
       });
     } else {
       await reference.delete();
@@ -869,6 +1132,14 @@ class MarketplaceRepository {
 
   Future<Map<String, dynamic>> _requestAccountDeletion() async {
     final user = _requireAuthUser();
+    final lastSignIn = user.metadata.lastSignInTime;
+    if (lastSignIn == null ||
+        DateTime.now().difference(lastSignIn).abs() >
+            const Duration(minutes: 10)) {
+      throw StateError(
+        'For security, sign out and sign in again before requesting deletion.',
+      );
+    }
     const blocking = <String>[
       'pending',
       'accepted',
@@ -895,96 +1166,32 @@ class MarketplaceRepository {
     }
 
     final userRef = _firestore.collection('users').doc(user.uid);
-    await userRef.update(<String, dynamic>{
-      'status': AccountStatus.deletionPending.name,
-      'updatedAt': FieldValue.serverTimestamp(),
-    });
-
-    final customerBookings = await _firestore
-        .collection('bookings')
-        .where('customerId', isEqualTo: user.uid)
-        .get();
-    final providerBookings = await _firestore
-        .collection('bookings')
-        .where('providerId', isEqualTo: user.uid)
-        .get();
-    final allBookings = <String, QueryDocumentSnapshot<Map<String, dynamic>>>{
-      for (final booking in customerBookings.docs) booking.id: booking,
-      for (final booking in providerBookings.docs) booking.id: booking,
-    };
-    for (final booking in allBookings.values) {
-      final data = booking.data();
-      final messages = await booking.reference
-          .collection('messages')
-          .where('senderId', isEqualTo: user.uid)
-          .get();
-      await _deleteInChunks(
-        messages.docs.map((item) => item.reference).toList(),
-      );
-      final batch = _firestore.batch();
-      batch.update(booking.reference, <String, dynamic>{
-        if (data['customerId'] == user.uid) 'customerName': 'Deleted user',
-        if (data['providerId'] == user.uid) 'providerName': 'Deleted provider',
+    final requestRef = _firestore.collection('deletion_requests').doc(user.uid);
+    await _firestore.runTransaction((transaction) async {
+      final userSnapshot = await transaction.get(userRef);
+      final requestSnapshot = await transaction.get(requestRef);
+      if (!userSnapshot.exists) throw StateError('Account profile not found.');
+      if (requestSnapshot.exists) return;
+      final currentStatus = userSnapshot.data()?['status'];
+      if (currentStatus != AccountStatus.active.name &&
+          currentStatus != AccountStatus.deletionPending.name) {
+        throw StateError('This account cannot request deletion.');
+      }
+      if (currentStatus == AccountStatus.active.name) {
+        transaction.update(userRef, <String, dynamic>{
+          'status': AccountStatus.deletionPending.name,
+          'updatedAt': FieldValue.serverTimestamp(),
+        });
+      }
+      transaction.set(requestRef, <String, dynamic>{
+        'uid': user.uid,
+        'status': DeletionRequestStatus.requested.name,
+        'failureMessage': '',
+        'requestedAt': FieldValue.serverTimestamp(),
         'updatedAt': FieldValue.serverTimestamp(),
       });
-      batch.update(
-        booking.reference.collection('private').doc('contact'),
-        <String, dynamic>{
-          if (data['customerId'] == user.uid) ...<String, dynamic>{
-            'customerPhone': '',
-            'address': '',
-            'landmark': '',
-          },
-          if (data['providerId'] == user.uid) 'providerPhone': '',
-        },
-      );
-      await batch.commit();
-    }
-
-    final services = await _firestore
-        .collection('services')
-        .where('providerId', isEqualTo: user.uid)
-        .get();
-    final reviews = await _firestore
-        .collection('reviews')
-        .where('customerId', isEqualTo: user.uid)
-        .get();
-    final blocks = await _firestore
-        .collection('blocks')
-        .doc(user.uid)
-        .collection('users')
-        .get();
-    await _deleteInChunks(<DocumentReference<Map<String, dynamic>>>[
-      ...services.docs.map((item) => item.reference),
-      ...reviews.docs.map((item) => item.reference),
-      ...blocks.docs.map((item) => item.reference),
-    ]);
-    final providerProfile = _firestore
-        .collection('provider_profiles')
-        .doc(user.uid);
-    if ((await providerProfile.get()).exists) await providerProfile.delete();
-
-    await userRef.update(<String, dynamic>{
-      'displayName': 'Deleted user',
-      'email': '',
-      'phoneE164': '',
-      'photoPath': null,
-      'updatedAt': FieldValue.serverTimestamp(),
     });
-    await user.delete();
-    return _result(user.uid, 'deleted');
-  }
-
-  Future<void> _deleteInChunks(
-    List<DocumentReference<Map<String, dynamic>>> references,
-  ) async {
-    for (var start = 0; start < references.length; start += 400) {
-      final batch = _firestore.batch();
-      for (final reference in references.skip(start).take(400)) {
-        batch.delete(reference);
-      }
-      await batch.commit();
-    }
+    return _result(user.uid, DeletionRequestStatus.requested.name);
   }
 
   DocumentReference<Map<String, dynamic>> _slotReference(
@@ -1032,4 +1239,24 @@ class MarketplaceRepository {
     'id': id,
     'status': status,
   };
+
+  List<String> _normalizedLabels(List<String> values) {
+    final labelsByKey = <String, String>{};
+    for (final value in values) {
+      final label = value.trim().replaceAll(RegExp(r'\s+'), ' ');
+      final key = Validators.normalizeKey(label);
+      if (label.isNotEmpty && key.isNotEmpty) labelsByKey[key] = label;
+    }
+    final entries = labelsByKey.entries.toList()
+      ..sort((a, b) => a.key.compareTo(b.key));
+    return entries.map((entry) => entry.value).toList(growable: false);
+  }
+
+  bool _sameStrings(List<String> left, List<String> right) {
+    if (left.length != right.length) return false;
+    for (var index = 0; index < left.length; index++) {
+      if (left[index] != right[index]) return false;
+    }
+    return true;
+  }
 }
