@@ -1,9 +1,10 @@
 # FixMate — Firebase Spark Edition
 
-FixMate is a Flutter Android marketplace for booking approved home-service
-providers across Bangladesh. This edition is intentionally designed for the
-no-cost Firebase **Spark** plan and direct GitHub import into
-[FlutLab](https://flutlab.io/).
+FixMate is a Flutter marketplace for booking approved home-service providers
+across Bangladesh. Android remains the release target, and a Firebase-connected
+web build is included for FlutLab Web preview and browser testing. This edition
+is intentionally designed for the no-cost Firebase **Spark** plan and direct
+GitHub import into [FlutLab](https://flutlab.io/).
 
 ## Included beta functionality
 
@@ -39,6 +40,7 @@ booking atomically creates a unique `provider_slots` lock.
 
 ```text
 android/                 Android package com.fixmatebd.app
+web/                     FlutLab Web/PWA entry point and metadata
 assets/                  Bangladesh division/district data
 lib/                     Flutter application
 functions/               Local seed and Firestore Rules test tooling only
@@ -51,9 +53,10 @@ firestore.indexes.json   Required Firestore indexes
 ## 1. Connected no-cost Firebase project
 
 FixMate is configured for Firebase project `fixmate-ce36d` on the **Spark**
-plan. The registered Android package is `com.fixmatebd.app`, and Firestore was
-created in `asia-south1` Mumbai. The official FlutterFire workflow generated
-the Android client configuration and added the required Google Services and
+plan. The registered Android package is `com.fixmatebd.app`, a dedicated
+FixMate web app is registered in the same project, and Firestore was created in
+`asia-south1` Mumbai. The official FlutterFire workflow generated Android and
+web client options and added the required Android Google Services and
 Crashlytics Gradle plugins.
 
 Still complete or verify in Firebase Console:
@@ -75,11 +78,14 @@ call Firebase Storage.
    are non-secret Firebase client identifiers, not Admin credentials.
 3. Do not create a second Firebase app or replace the generated configuration
    with values from another project.
-4. Run **Pub get** using the FlutLab-compatible pinned builder: Flutter
-   3.41.6 / Dart 3.11.4.
+4. Select FlutLab's Flutter 3.41 builder (currently Flutter 3.41.7) and run
+   **Pub get** with the committed lockfile.
+5. For browser preview, open **Settings → Builder**, select `web-emulator`,
+   then run **Build Project** and open **Web Emulator**.
 
-FixMate already initializes Firebase, App Check, and Crashlytics in `main.dart`.
-Do not replace it with a tutorial initialization snippet.
+FixMate already initializes Firebase in `main.dart`. App Check and Crashlytics
+remain Android-only in this release; App Check enforcement stays disabled.
+Do not replace the guarded initialization with a tutorial snippet.
 
 ## 3. Deploy only Firestore configuration
 
@@ -144,6 +150,7 @@ flutter pub get
 dart format --output=none --set-exit-if-changed lib test
 flutter analyze
 flutter test
+flutter build web --debug
 flutter build apk --debug
 ```
 

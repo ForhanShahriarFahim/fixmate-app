@@ -26,6 +26,7 @@ jobs:
       - run: dart format --output=none --set-exit-if-changed lib test
       - run: flutter analyze
       - run: flutter test
+      - run: flutter build web --debug
       - run: flutter build apk --debug
 
   firebase-rules:

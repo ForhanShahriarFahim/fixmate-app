@@ -283,6 +283,11 @@ The first APK attempts exposed environmental and repository compatibility issues
 - **Stage 6B — Firestore deployment:** fully closed. Rules and all six categories match the review, all 11 matching indexes are Enabled/`READY`, App Check enforcement remains disabled, and no unrelated Firebase resource was deployed. Device behavior remains a later manual milestone.
 - **Stage 7A — GitHub review:** complete locally. Diff, workflow permissions, Firebase client-file strategy, documentation, Windows Gradle failure propagation, release-signing denial, and redacted repository/history secret scans were reviewed before intentional commits.
 - **Internal testing:** blocked until Authentication/Firestore device connectivity, App Check monitoring, FlutLab behavior, legal pages, signing, Play declarations, and physical-device checks are manually verified.
+- **FlutLab Web preview:** Android remains the release target, but a dedicated
+  Firebase web app, generated web options, platform-aware identity guard, and
+  Flutter web scaffold are now implemented. Local Pub Get, analysis, 16 Flutter
+  tests, Rules tests, debug web build, and Android debug regression build pass;
+  live FlutLab Web startup remains pending browser reconnection.
 
 ## Progress log
 
