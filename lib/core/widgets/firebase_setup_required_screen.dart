@@ -30,8 +30,8 @@ class FirebaseSetupRequiredScreen extends StatelessWidget {
                 Text(
                   message ??
                       'Firebase client configuration is missing or invalid. '
-                          'In FlutLab, choose Connect to Firebase, upload the matching google-services.json, '
-                          'regenerate lib/core/firebase/firebase_options.dart for Android, and rebuild FixMate.',
+                          'Use the matching android/app/google-services.json for Android and the generated web section in '
+                          'lib/core/firebase/firebase_options.dart, then rebuild FixMate.',
                   textAlign: TextAlign.center,
                 ),
                 const SizedBox(height: 20),
@@ -39,8 +39,8 @@ class FirebaseSetupRequiredScreen extends StatelessWidget {
                   child: Padding(
                     padding: EdgeInsets.all(18),
                     child: Text(
-                      'Required Firebase products: Authentication, Firestore, App Check, and Crashlytics. '
-                      'Keep the project on the no-cost Spark plan.',
+                      'Required Firebase products: Authentication and Firestore. Android also initializes App Check and Crashlytics. '
+                      'Keep the project on the no-cost Spark plan and App Check enforcement disabled until verified.',
                     ),
                   ),
                 ),

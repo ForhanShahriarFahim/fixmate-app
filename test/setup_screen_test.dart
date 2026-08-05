@@ -17,6 +17,24 @@ void main() {
     );
   });
 
+  test('uses the verified FixMate web Firebase project', () {
+    expect(
+      FirebaseConfiguration.hasExpectedIdentity(
+        DefaultFirebaseOptions.web,
+        isWebPlatform: true,
+      ),
+      isTrue,
+    );
+    expect(
+      DefaultFirebaseOptions.web.projectId,
+      FirebaseConfiguration.expectedProjectId,
+    );
+    expect(
+      DefaultFirebaseOptions.web.appId,
+      FirebaseConfiguration.expectedWebAppId,
+    );
+  });
+
   testWidgets('explains Firebase setup when configuration is missing', (
     tester,
   ) async {
@@ -24,7 +42,7 @@ void main() {
       const MaterialApp(home: FirebaseSetupRequiredScreen()),
     );
     expect(find.text('Connect FixMate to Firebase'), findsOneWidget);
-    expect(find.textContaining('google-services.json'), findsOneWidget);
+    expect(find.textContaining('firebase_options.dart'), findsOneWidget);
   });
 
   testWidgets('shows a safe Firebase initialization failure', (tester) async {

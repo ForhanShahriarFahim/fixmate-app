@@ -43,7 +43,7 @@ Future<void> main() async {
         child: FixMateApp(
           firebaseConfigured: false,
           firebaseSetupMessage:
-              'FixMate could not safely connect to Firebase. Check the Android app registration, generated Firebase options, google-services.json, network connection, and App Check setup, then rebuild the app.',
+              'FixMate could not safely connect to Firebase. Check the registered Android or web app, generated Firebase options, network connection, and platform setup, then rebuild the app.',
         ),
       ),
     );
