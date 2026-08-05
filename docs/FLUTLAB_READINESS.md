@@ -28,13 +28,17 @@ or initialization failure still shows a safe setup-required screen.
 
 1. Import the public GitHub repository `fixmate-app`; select the repository
    root, not `android/` or another subdirectory.
+   FlutLab requires the standard `ios/` scaffold to recognize an imported
+   Flutter project even when only Android is being built. The scaffold is
+   retained for import compatibility; iOS is not configured or in release
+   scope.
 2. Select Android as the target and Flutter `3.41.6` / Dart `3.11.4`. Do not
    allow an automatic dependency or Flutter upgrade during the first build.
 3. Run **Pub Get** and keep the committed `pubspec.lock`.
 4. Build an Android debug APK first. Java 17 or 21 is compatible with this
    repository's Gradle configuration.
-5. Do not add web, iOS, image-upload, Functions, Storage, or push-notification
-   configuration for this release.
+5. Do not add web or iOS Firebase/release configuration, image uploads,
+   Functions, Storage, or push notifications for this release.
 
 There are no local path or Git package dependencies. The Android build disables
 Kotlin incremental compilation so Windows/cloud builds remain reliable when
