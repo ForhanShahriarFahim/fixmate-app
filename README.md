@@ -26,9 +26,10 @@ no-cost Firebase **Spark** plan and direct GitHub import into
 No billing account or Blaze upgrade is required. This edition deliberately
 does not use Cloud Functions or Cloud Storage, so it does not include uploaded
 avatars/service covers, Android push delivery, scheduled jobs, or trigger-based
-aggregates. Account deletion performs client-side cleanup and retains only a
-pseudonymous deletion marker and moderation identifiers for manual security
-handling.
+aggregates. Account deletion creates one atomic, idempotent request and locks
+the account; an authorized administrator then performs the documented,
+restartable cleanup in Firebase Console. The client never claims that a
+request is already completed.
 
 Firestore Security Rules are the authoritative backend validator. Every
 booking status change includes a matching append-only event, and accepting a
@@ -47,33 +48,35 @@ firestore.rules          Spark marketplace authorization policy
 firestore.indexes.json   Required Firestore indexes
 ```
 
-## 1. Create a no-cost Firebase project
+## 1. Connected no-cost Firebase project
 
-1. Create `fixmatebd-app-2026` (fallback `fixmatebd-app-2026-bd`).
-2. Keep the project on the **Spark** plan. Do not attach a billing account.
-3. Enable Email/Password in Authentication.
-4. Create the one free Firestore database in `asia-south1` Mumbai using
-   Production mode.
-5. Register Android package `com.fixmatebd.app` and download
-   `google-services.json`.
-6. Enable Crashlytics and register App Check. Keep App Check enforcement off
-   until genuine debug/internal-test traffic has been verified.
+FixMate is configured for Firebase project `fixmate-ce36d` on the **Spark**
+plan. The registered Android package is `com.fixmatebd.app`, and Firestore was
+created in `asia-south1` Mumbai. The official FlutterFire workflow generated
+the Android client configuration and added the required Google Services and
+Crashlytics Gradle plugins.
+
+Still complete or verify in Firebase Console:
+
+1. Enable Email/Password in Authentication.
+2. Register the Android app for App Check. Keep enforcement off until genuine
+   debug/internal-test traffic has been verified.
+3. Verify Crashlytics with a deliberate non-fatal event from a test device.
 
 Do not enable Cloud Functions or Cloud Storage. The `storageBucket` value in a
 generated Firebase options file is harmless client metadata; the app does not
 call Firebase Storage.
 
-## 2. Connect Firebase in FlutLab
+## 2. Use Firebase in FlutLab
 
 1. Import the GitHub repository root.
-2. Select **Connect to Firebase → Android** and upload
-   `google-services.json`.
-3. Copy FlutLab's generated `lib/firebase_options.dart` over
-   `lib/core/firebase/firebase_options.dart`, then remove the extra generated
-   file.
-4. Confirm no `REPLACE_WITH` placeholders remain.
-5. Run **Pub get** using Flutter 3.44.6 / Dart 3.12 or a newer compatible
-   builder.
+2. Confirm that `android/app/google-services.json` and
+   `lib/core/firebase/firebase_options.dart` are present after import. These
+   are non-secret Firebase client identifiers, not Admin credentials.
+3. Do not create a second Firebase app or replace the generated configuration
+   with values from another project.
+4. Run **Pub get** using the FlutLab-compatible pinned builder: Flutter
+   3.41.6 / Dart 3.11.4.
 
 FixMate already initializes Firebase, App Check, and Crashlytics in `main.dart`.
 Do not replace it with a tutorial initialization snippet.
@@ -84,12 +87,15 @@ Install Firebase CLI, then run from the repository root:
 
 ```console
 firebase login
-firebase use --add
-firebase deploy --only firestore:rules,firestore:indexes
+firebase projects:list
+npm --prefix functions run test:rules
+firebase deploy --project fixmate-ce36d --only firestore:rules
+firebase deploy --project fixmate-ce36d --only firestore:indexes
 ```
 
-This deploy does not require Blaze. A manual GitHub Actions workflow is also
-included, but only use it after configuring its Workload Identity variables.
+This deploy does not require Blaze. The repository intentionally has no
+`.firebaserc`, so every operator command must name `fixmate-ce36d` explicitly.
+The GitHub Actions workflow validates the repository but does not deploy it.
 
 ## 4. Seed the six categories
 
@@ -101,11 +107,14 @@ cd functions
 npm ci
 npm test
 gcloud auth application-default login
-npm run seed -- --project fixmatebd-app-2026
+npm run seed -- --project fixmate-ce36d
+gcloud auth application-default revoke
 ```
 
 The seed creates electrical, plumbing, cleaning, AC repair, appliance repair,
-and painting categories. Change the project ID when using the fallback.
+and painting categories with stable document IDs. It uses operator user
+Application Default Credentials; never substitute a downloaded service-account
+key. Obtain separate approval before running the seed against Firebase.
 
 ## 5. Approve a provider
 
@@ -113,12 +122,12 @@ and painting categories. Change the project ID when using the fallback.
 2. Complete the provider application.
 3. Open Firestore → `provider_profiles/{uid}`.
 4. Verify the supplied details and change `approvalStatus` from `pending` to
-   `approved`.
-5. To suspend an account, update `users/{uid}.status` to `suspended` through
-   Firebase Console.
+   `approved`, then set `marketplaceVisible` to `true`.
+5. To suspend an account, first set `marketplaceVisible` to `false`, then
+   update `users/{uid}.status` to `suspended` through Firebase Console.
 
-See [ADMIN_RUNBOOK.md](ADMIN_RUNBOOK.md) for moderation, disputes, and deletion
-handling.
+See [docs/ADMIN_RUNBOOK.md](docs/ADMIN_RUNBOOK.md) for moderation, disputes,
+and deletion handling.
 
 ## Verification
 
@@ -135,7 +144,7 @@ flutter pub get
 dart format --output=none --set-exit-if-changed lib test
 flutter analyze
 flutter test
-flutter build apk
+flutter build apk --debug
 ```
 
 For Play upload, add `android/key.properties` and a private upload keystore
@@ -143,7 +152,7 @@ through a secure local/FlutLab mechanism. Those files are intentionally ignored.
 
 ## Legal URLs
 
-Application constants currently use `https://fixmatebd.github.io/fixmate-app/`.
-If the GitHub Pages owner differs, update
-`lib/core/constants/app_constants.dart` before release. Reserve
-`fixmatebd.support@gmail.com` before publishing.
+Application constants use
+`https://forhanshahriarfahim.github.io/fixmate-app/`, matching the configured
+GitHub repository owner. Reserve `fixmatebd.support@gmail.com` and manually
+verify every published link before internal testing.

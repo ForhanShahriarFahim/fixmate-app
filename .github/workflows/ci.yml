@@ -13,14 +13,20 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+          cache: gradle
       - uses: subosito/flutter-action@v2
         with:
-          flutter-version: 3.44.6
+          flutter-version: 3.41.6
           cache: true
       - run: flutter pub get
       - run: dart format --output=none --set-exit-if-changed lib test
       - run: flutter analyze
       - run: flutter test
+      - run: flutter build apk --debug
 
   firebase-rules:
     runs-on: ubuntu-latest

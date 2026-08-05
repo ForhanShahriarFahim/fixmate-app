@@ -1,13 +1,13 @@
 # Google Play internal testing checklist
 
-- [ ] Replace Firebase placeholders and confirm `com.fixmatebd.app` in Firebase and Play Console.
-- [ ] Generate and commit `pubspec.lock`; run Flutter analyzer and all tests.
+- [x] Generate Android client configuration for Firebase project `fixmate-ce36d` and confirm `com.fixmatebd.app`.
+- [x] Generate `pubspec.lock`; run Flutter analyzer, tests, Rules tests, and a debug APK build.
 - [ ] Keep Firebase on Spark; deploy Firestore Rules/indexes and seed categories.
 - [ ] Verify provider approval, conflict prevention, contact release, chat/block/report, completion, review, and deletion with two real test accounts.
 - [ ] Enable Crashlytics and verify one non-fatal test event.
 - [ ] Validate App Check monitoring, then enforce before beta promotion.
 - [ ] Reserve `fixmatebd.support@gmail.com` and verify support mailto links.
-- [ ] Publish GitHub Pages and replace the owner in legal URLs if necessary.
+- [ ] Publish GitHub Pages and verify the repository-owner legal URLs on a device.
 - [ ] Review Terms and Privacy Policy with the publisher/legal adviser.
 - [ ] Complete Play Data safety, account deletion URL, UGC/content-rating, and privacy policy declarations accurately.
 - [ ] Create a non-debug upload keystore and provide secure `android/key.properties` values for the release build.
