@@ -300,6 +300,13 @@ The first APK attempts exposed environmental and repository compatibility issues
   standard Flutter 3.41.6 iOS scaffold and project metadata were added solely
   for import compatibility; Android remains the only configured first-release
   platform and no iOS Firebase or release work was added.
+- 2026-08-05: Merged `main` then imported successfully into FlutLab. Its Flutter
+  3.41 builder resolved to 3.41.7; Pub Get and all 15 Flutter tests passed. The
+  `android-all` action invoked `assembleRelease` and correctly stopped at the
+  intentional missing-signing guard. Hot Reload was web-only and no Android
+  emulator/device was connected, so Android debug startup, Firebase runtime,
+  and the authentication screen remain unverified in FlutLab. No signing
+  material was added and no Firebase resource was modified.
 - 2026-08-05: Stage 6A mapped every application compound query to 11 indexes, extracted and tested the exact six-document merge-safe category manifest, corrected the seed command's old project ID, and expanded Rules coverage to 24 emulator cases. No Rules/index/data operation ran against `fixmate-ce36d`.
 - 2026-08-05: Stage 7A found and fixed forbidden cross-user private reads that would have broken real booking and communication flows, allowed cancellation when the other participant is suspended, denied messages to suspended recipients, made release signing fail closed, and repaired Windows Gradle exit propagation. Final Flutter tests (15), Rules tests (24), TypeScript checks, secret/history scan, whitespace review, and debug APK build passed.
 - 2026-08-05: Stage 6B deployed only the reviewed Firestore Rules, 11 composite indexes, and idempotent six-category seed to `fixmate-ce36d`. Closure readback matched the Rules hash and six category documents, verified all 11 indexes as `READY`, and confirmed App Check enforcement disabled. No other Firebase product or unrelated document was deployed or seeded.
