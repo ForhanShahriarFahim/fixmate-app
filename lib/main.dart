@@ -30,31 +30,23 @@ Future<void> main() async {
         );
         firebaseInitialized = true;
 
-        if (!kIsWeb) {
-          if (FirebaseConfiguration.appCheckEnabled) {
-            await FirebaseAppCheck.instance.activate(
-              providerAndroid: kDebugMode
-                  ? const AndroidDebugProvider()
-                  : const AndroidPlayIntegrityProvider(),
-            );
-          }
-          FlutterError.onError = (FlutterErrorDetails details) {
-            if (kDebugMode) FlutterError.presentError(details);
-            FirebaseCrashlytics.instance.recordFlutterFatalError(details);
-          };
-          PlatformDispatcher
-              .instance
-              .onError = (Object error, StackTrace stack) {
-            if (kDebugMode) {
-              debugPrint(
-                'Uncaught FixMate platform error: ${error.runtimeType}',
-              );
-              debugPrintStack(stackTrace: stack);
-            }
-            FirebaseCrashlytics.instance.recordError(error, stack, fatal: true);
-            return true;
-          };
+        if (FirebaseConfiguration.appCheckEnabled && kDebugMode) {
+          await FirebaseAppCheck.instance.activate(
+            providerAndroid: const AndroidDebugProvider(),
+          );
         }
+        FlutterError.onError = (FlutterErrorDetails details) {
+          if (kDebugMode) FlutterError.presentError(details);
+          FirebaseCrashlytics.instance.recordFlutterFatalError(details);
+        };
+        PlatformDispatcher.instance.onError = (Object error, StackTrace stack) {
+          if (kDebugMode) {
+            debugPrint('Uncaught FixMate platform error: ${error.runtimeType}');
+            debugPrintStack(stackTrace: stack);
+          }
+          FirebaseCrashlytics.instance.recordError(error, stack, fatal: true);
+          return true;
+        };
       } catch (error, stack) {
         debugPrint(
           'FixMate Firebase initialization failed: ${error.runtimeType}',
@@ -65,7 +57,7 @@ Future<void> main() async {
             child: FixMateApp(
               firebaseConfigured: false,
               firebaseSetupMessage:
-                  'FixMate could not safely connect to Firebase. Check the registered Android or web app, generated Firebase options, network connection, and platform setup, then rebuild the app.',
+                  'FixMate could not safely connect to Firebase. Check the registered Android app, generated Firebase options, network connection, and platform setup, then rebuild the app.',
             ),
           ),
         );
@@ -79,7 +71,7 @@ Future<void> main() async {
         debugPrint('Uncaught FixMate zone error: ${error.runtimeType}');
         debugPrintStack(stackTrace: stack);
       }
-      if (firebaseInitialized && !kIsWeb) {
+      if (firebaseInitialized) {
         unawaited(
           FirebaseCrashlytics.instance.recordError(error, stack, fatal: true),
         );

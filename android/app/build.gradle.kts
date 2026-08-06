@@ -29,13 +29,13 @@ val releaseTaskRequested = gradle.startParameter.taskNames.any {
 }
 if (releaseTaskRequested) {
     check(keystorePropertiesFile.exists()) {
-        "Release signing is not configured. Supply an untracked android/key.properties file and private upload keystore."
+        "Release signing is not configured. Supply an untracked android/key.properties file and private release keystore."
     }
     check(missingSigningProperties.isEmpty()) {
         "Release signing configuration is incomplete; required property names are missing."
     }
     check(rootProject.file(keystoreProperties.getProperty("storeFile")).isFile) {
-        "The release upload keystore path does not point to a file."
+        "The release keystore path does not point to a file."
     }
 }
 

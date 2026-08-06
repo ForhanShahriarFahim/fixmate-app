@@ -15,7 +15,7 @@ Last verified: 6 August 2026 (Asia/Dhaka)
 
 The repository has no local-path or Git package dependencies. Android debug
 builds use the tracked Firebase client configuration. Release builds continue
-to require a private upload keystore and an untracked `android/key.properties`;
+to require a private release keystore and an untracked `android/key.properties`;
 they never fall back to the debug signing key.
 
 ## First run
@@ -50,10 +50,10 @@ normal manual touch test.
 
 ## App Check during local development
 
-App Check is disabled by default until the Android app is registered in
-Firebase Console. After registration, debug builds use Firebase's Android
-debug provider and release builds use Play Integrity. Never hardcode or commit
-a debug token.
+App Check is disabled by default. Registered local debug builds can opt into
+Firebase's Android debug provider. The direct-distribution release does not
+activate a debug or release provider, and enforcement remains disabled. Never
+hardcode or commit a debug token.
 
 Start the registered debug build with:
 
@@ -93,8 +93,8 @@ On the M2003J15SC, Google Play services 26.28.33 logs a non-user-facing
 continued rendering and logged no fatal Android exception, Flutter exception,
 or zone mismatch. FixMate does not include Google Sign-In, and its Firebase
 project/package identities match, so this warning is not evidence of failed
-FixMate credentials or navigation. Update Google Play services/MIUI when an
-update is available and recheck on the Play-installed build; do not change the
+FixMate credentials or navigation. Update the device's Google Play services or
+MIUI system components when an update is available; do not change the
 application ID or weaken App Check to suppress it.
 
 ## Manual provider regression flow

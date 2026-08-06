@@ -107,9 +107,6 @@ jobs:
         run: npm run test:rules
         working-directory: functions
 
-      - name: Verify FlutLab web preview build
-        run: flutter build web --debug
-
       - name: Configure private Android signing
         shell: bash
         env:
@@ -125,7 +122,7 @@ jobs:
               exit 1
             fi
           done
-          keystore_path="$RUNNER_TEMP/fixmate-upload-keystore.jks"
+          keystore_path="$RUNNER_TEMP/fixmate-release-keystore.jks"
           printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$keystore_path"
           {
             printf 'storeFile=%s\n' "$keystore_path"
@@ -137,9 +134,6 @@ jobs:
       - name: Build signed release APK
         run: flutter build apk --release
 
-      - name: Build signed Play app bundle
-        run: flutter build appbundle --release
-
       - name: Prepare versioned release files
         shell: bash
         env:
@@ -149,8 +143,7 @@ jobs:
           mkdir -p dist
           cp build/app/outputs/flutter-apk/app-release.apk "dist/${ARTIFACT_STEM}-android.apk"
           cp build/app/outputs/flutter-apk/app-release.apk dist/fixmate-android.apk
-          cp build/app/outputs/bundle/release/app-release.aab "dist/${ARTIFACT_STEM}-play.aab"
-          (cd dist && sha256sum *.apk *.aab > SHA256SUMS.txt)
+          (cd dist && sha256sum *.apk > SHA256SUMS.txt)
 
       - name: Upload signed Android build artifact
         uses: actions/upload-artifact@v4
@@ -164,7 +157,7 @@ jobs:
         if: always()
         shell: bash
         run: |
-          rm -f android/key.properties "$RUNNER_TEMP/fixmate-upload-keystore.jks"
+          rm -f android/key.properties "$RUNNER_TEMP/fixmate-release-keystore.jks"
 
   publish:
     name: Publish GitHub Release assets

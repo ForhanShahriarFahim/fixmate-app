@@ -36,8 +36,7 @@
         "lib/core/firebase/firebase_options.dart": {
           "projectId": "fixmate-ce36d",
           "configurations": {
-            "android": "1:186366110068:android:81a7c2859eae0bb7156421",
-            "web": "1:186366110068:web:cd6be69830847ab9156421"
+            "android": "1:186366110068:android:81a7c2859eae0bb7156421"
           }
         }
       }

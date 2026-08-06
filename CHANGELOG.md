@@ -3,31 +3,38 @@
 All notable FixMate changes are recorded here. Versions follow
 `MAJOR.MINOR.PATCH+BUILD` from `pubspec.yaml`; Git tags add a `v` prefix.
 
-## Unreleased
+## 1.0.0+1 — 2026-08-06
 
 ### Added
 
-- Safe administrator deletion for inactive, unused service categories.
-- Downloadable debug APK artifacts on successful CI runs.
-- Signed tag workflow for versioned APKs, a stable APK download, checksums, and
-  a Play App Bundle artifact.
-- Android release/versioning runbook and documentation maintenance plan.
-- Firebase-connected web compilation in CI to protect FlutLab preview support.
+- Customer, provider, and trusted administrator Android workflows.
+- Provider approval and service-category management.
+- Safe deletion for inactive categories not referenced by a service.
+- Provider reputation, confirmed-cash analytics, review history, and in-app
+  Activity unread state.
+- Downloadable debug APK artifacts for successful CI runs.
+- Signed GitHub Release workflow with stable/versioned APKs and checksums.
+- Android development, administrator, release, and operational documentation.
 
 ### Changed
 
-- Service-category cards now use a compact, accessible actions menu with clear
-  active/inactive state and destructive-action guidance.
-- README reorganized around product roles, architecture, setup, security,
-  FlutLab, CI/CD, versioning, downloads, and release limitations.
-- Release tags must match `pubspec.yaml` and point to a commit contained in
-  `main` before signed artifacts can be built.
+- Hardened authentication/profile recovery, provider onboarding, booking return
+  navigation, loading/error states, and duplicate-submission prevention.
+- Replaced unreliable aggregate calls with bounded paginated reads.
+- Standardized category management UI, BDT/date presentation, review cards,
+  accessibility labels, and Android layouts.
+- Limited the repository and release pipeline to Android only.
+- Updated the Firebase test and seed toolchain and removed all high-severity
+  npm audit findings without a forced dependency downgrade.
 
 ### Security
 
-- Category deletion requires an active administrator and an inactive category;
-  the application refuses deletion while any service still references its ID.
-- Signed release builds remain fail-closed when private signing configuration is
-  missing. No signing credential is stored in the repository.
-- The reviewed category-deletion Rules are deployed and their live source was
-  verified against the repository file.
+- Marketplace writes require verified active accounts and protected role/state
+  transitions.
+- Category deletion requires an active administrator and inactive category;
+  referenced categories cannot be deleted.
+- Release signing fails closed and private signing material is never committed.
+- The reviewed Firestore Rules are deployed and live-source verified against
+  the repository file.
+- Nine moderate transitive advisories remain in Firebase CLI/Admin tooling;
+  those operator/test packages are not bundled in the Android APK.

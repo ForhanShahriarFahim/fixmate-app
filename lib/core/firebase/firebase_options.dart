@@ -2,7 +2,7 @@
 // ignore_for_file: type=lint
 import 'package:firebase_core/firebase_core.dart' show FirebaseOptions;
 import 'package:flutter/foundation.dart'
-    show defaultTargetPlatform, kIsWeb, TargetPlatform;
+    show defaultTargetPlatform, TargetPlatform;
 
 /// Default [FirebaseOptions] for use with your Firebase apps.
 ///
@@ -16,9 +16,6 @@ import 'package:flutter/foundation.dart'
 /// ```
 class DefaultFirebaseOptions {
   static FirebaseOptions get currentPlatform {
-    if (kIsWeb) {
-      return web;
-    }
     switch (defaultTargetPlatform) {
       case TargetPlatform.android:
         return android;
@@ -48,16 +45,6 @@ class DefaultFirebaseOptions {
         );
     }
   }
-
-  static const FirebaseOptions web = FirebaseOptions(
-    apiKey: 'AIzaSyCvbO9_HKYggBs0QbJzz01jm01bIH8ZFJ0',
-    appId: '1:186366110068:web:cd6be69830847ab9156421',
-    messagingSenderId: '186366110068',
-    projectId: 'fixmate-ce36d',
-    authDomain: 'fixmate-ce36d.firebaseapp.com',
-    storageBucket: 'fixmate-ce36d.firebasestorage.app',
-    measurementId: 'G-4D7K7HD0SG',
-  );
 
   static const FirebaseOptions android = FirebaseOptions(
     apiKey: 'AIzaSyBNP-dctRT6ry_bZ1F5QgHZ2NnyGgCpZhk',
