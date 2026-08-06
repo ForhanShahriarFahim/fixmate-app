@@ -7,6 +7,7 @@ import 'package:go_router/go_router.dart';
 import 'package:fixmate/core/data/firebase_providers.dart';
 import 'package:fixmate/core/domain/models.dart';
 import 'package:fixmate/core/widgets/common_widgets.dart';
+import 'package:fixmate/features/admin/admin_screens.dart';
 import 'package:fixmate/features/auth/auth_screens.dart';
 import 'package:fixmate/features/bookings/booking_screens.dart';
 import 'package:fixmate/features/catalog/catalog_screens.dart';
@@ -31,7 +32,7 @@ final appRouterProvider = Provider<GoRouter>((ref) {
     },
     errorBuilder: (context, state) => Scaffold(
       appBar: AppBar(title: const Text('FixMate')),
-      body: ErrorView(message: state.error?.toString() ?? 'Page not found.'),
+      body: const ErrorView(message: 'This FixMate page is not available.'),
     ),
     routes: [
       GoRoute(
@@ -53,16 +54,26 @@ final appRouterProvider = Provider<GoRouter>((ref) {
       ),
       GoRoute(
         path: '/customer',
-        builder: (context, state) => const _RoleGuard(
+        builder: (context, state) => _RoleGuard(
           expectedRole: UserRole.customer,
-          child: CustomerShell(),
+          child: CustomerShell(
+            initialIndex: shellTabIndex(
+              state.uri.queryParameters['tab'],
+              provider: false,
+            ),
+          ),
         ),
       ),
       GoRoute(
         path: '/provider',
-        builder: (context, state) => const _RoleGuard(
+        builder: (context, state) => _RoleGuard(
           expectedRole: UserRole.provider,
-          child: ProviderShell(),
+          child: ProviderShell(
+            initialIndex: shellTabIndex(
+              state.uri.queryParameters['tab'],
+              provider: true,
+            ),
+          ),
         ),
       ),
       GoRoute(
@@ -80,6 +91,29 @@ final appRouterProvider = Provider<GoRouter>((ref) {
           expectedRole: UserRole.provider,
           child: ServiceEditorScreen(service: state.extra as ServiceListing?),
         ),
+      ),
+      GoRoute(
+        path: '/account',
+        builder: (context, state) =>
+            const _AccountGuard(child: ProfileScreen()),
+      ),
+      GoRoute(
+        path: '/admin',
+        builder: (context, state) =>
+            const _AdminGuard(child: AdminDashboardScreen()),
+      ),
+      GoRoute(
+        path: '/admin/provider/:providerId',
+        builder: (context, state) => _AdminGuard(
+          child: AdminProviderReviewScreen(
+            providerId: state.pathParameters['providerId']!,
+          ),
+        ),
+      ),
+      GoRoute(
+        path: '/admin/categories',
+        builder: (context, state) =>
+            const _AdminGuard(child: AdminCategoriesScreen()),
       ),
       GoRoute(
         path: '/provider/:providerId',
@@ -166,25 +200,41 @@ class _RoleGuard extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final profile = ref.watch(currentUserProfileProvider);
-    return profile.when(
+    final admin = ref.watch(currentAdminMembershipProvider);
+    return admin.when(
       loading: () => const Scaffold(body: LoadingView()),
-      error: (error, stack) =>
-          Scaffold(body: ErrorView(message: error.toString())),
-      data: (value) {
-        if (value == null) return const Scaffold(body: LoadingView());
-        if (value.status != AccountStatus.active) {
-          return AccountRestrictedScreen(profile: value);
-        }
-        if (value.role != expectedRole) {
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            context.go(
-              value.role == UserRole.customer ? '/customer' : '/provider',
-            );
-          });
+      error: (error, stack) => ProfileLoadErrorScreen(
+        error: error,
+        onRetry: () => ref.invalidate(currentAdminMembershipProvider),
+      ),
+      data: (membership) {
+        if (membership?.active == true) {
+          _goAfterBuild(context, '/admin');
           return const Scaffold(body: LoadingView());
         }
-        return child;
+        final profile = ref.watch(currentUserProfileProvider);
+        return profile.when(
+          loading: () => const Scaffold(body: LoadingView()),
+          error: (error, stack) => ProfileLoadErrorScreen(
+            error: error,
+            onRetry: () => ref.invalidate(currentUserProfileProvider),
+          ),
+          data: (value) {
+            if (value == null) {
+              return MissingProfileRecoveryScreen(
+                onRetry: () => ref.invalidate(currentUserProfileProvider),
+              );
+            }
+            if (value.status != AccountStatus.active) {
+              return AccountRestrictedScreen(profile: value);
+            }
+            if (value.role != expectedRole) {
+              _goAfterBuild(context, profileDestination(value));
+              return const Scaffold(body: LoadingView());
+            }
+            return child;
+          },
+        );
       },
     );
   }
@@ -197,20 +247,103 @@ class _AccountGuard extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final profile = ref.watch(currentUserProfileProvider);
-    return profile.when(
+    final admin = ref.watch(currentAdminMembershipProvider);
+    return admin.when(
       loading: () => const Scaffold(body: LoadingView()),
-      error: (error, stack) =>
-          Scaffold(body: ErrorView(message: error.toString())),
-      data: (value) {
-        if (value == null) return const Scaffold(body: LoadingView());
-        if (value.status != AccountStatus.active) {
-          return AccountRestrictedScreen(profile: value);
+      error: (error, stack) => ProfileLoadErrorScreen(
+        error: error,
+        onRetry: () => ref.invalidate(currentAdminMembershipProvider),
+      ),
+      data: (membership) {
+        if (membership?.active == true) {
+          _goAfterBuild(context, '/admin');
+          return const Scaffold(body: LoadingView());
         }
-        return child;
+        final profile = ref.watch(currentUserProfileProvider);
+        return profile.when(
+          loading: () => const Scaffold(body: LoadingView()),
+          error: (error, stack) => ProfileLoadErrorScreen(
+            error: error,
+            onRetry: () => ref.invalidate(currentUserProfileProvider),
+          ),
+          data: (value) {
+            if (value == null) {
+              return MissingProfileRecoveryScreen(
+                onRetry: () => ref.invalidate(currentUserProfileProvider),
+              );
+            }
+            if (value.status != AccountStatus.active) {
+              return AccountRestrictedScreen(profile: value);
+            }
+            return child;
+          },
+        );
       },
     );
   }
+}
+
+class _AdminGuard extends ConsumerWidget {
+  const _AdminGuard({required this.child});
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final admin = ref.watch(currentAdminMembershipProvider);
+    return admin.when(
+      loading: () => const Scaffold(body: LoadingView()),
+      error: (error, stack) => ProfileLoadErrorScreen(
+        error: error,
+        onRetry: () => ref.invalidate(currentAdminMembershipProvider),
+      ),
+      data: (membership) {
+        if (membership?.active == true) return child;
+        final profile = ref.watch(currentUserProfileProvider);
+        return profile.when(
+          loading: () => const Scaffold(body: LoadingView()),
+          error: (error, stack) => ProfileLoadErrorScreen(
+            error: error,
+            onRetry: () => ref.invalidate(currentUserProfileProvider),
+          ),
+          data: (value) {
+            if (value == null) {
+              return MissingProfileRecoveryScreen(
+                onRetry: () => ref.invalidate(currentUserProfileProvider),
+              );
+            }
+            _goAfterBuild(context, profileDestination(value));
+            return const Scaffold(body: LoadingView());
+          },
+        );
+      },
+    );
+  }
+}
+
+String profileDestination(AppUserProfile profile) =>
+    profile.role == UserRole.customer ? '/customer' : '/provider';
+
+int shellTabIndex(String? tab, {required bool provider}) => switch (tab) {
+  'bookings' => 1,
+  'services' when provider => 2,
+  'activity' => provider ? 3 : 2,
+  'profile' => provider ? 4 : 3,
+  _ => 0,
+};
+
+String? resolveSessionDestination({
+  required bool isAdmin,
+  required AppUserProfile? profile,
+}) {
+  if (isAdmin) return '/admin';
+  return profile == null ? null : profileDestination(profile);
+}
+
+void _goAfterBuild(BuildContext context, String location) {
+  WidgetsBinding.instance.addPostFrameCallback((_) {
+    if (context.mounted) context.go(location);
+  });
 }
 
 class _AuthRefreshNotifier extends ChangeNotifier {

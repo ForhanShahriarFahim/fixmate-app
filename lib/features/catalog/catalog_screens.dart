@@ -504,6 +504,15 @@ class ServiceDetailScreen extends ConsumerWidget {
                     .read(marketplaceRepositoryProvider)
                     .watchProviderReviews(service.providerId),
                 builder: (context, snapshot) {
+                  if (snapshot.hasError) {
+                    return Card(
+                      child: ListTile(
+                        leading: const Icon(Icons.error_outline),
+                        title: const Text('Reviews temporarily unavailable'),
+                        subtitle: Text(friendlyError(snapshot.error!)),
+                      ),
+                    );
+                  }
                   if (!snapshot.hasData) return const LinearProgressIndicator();
                   if (snapshot.data!.isEmpty) {
                     return const Padding(
@@ -531,20 +540,7 @@ class ServiceDetailScreen extends ConsumerWidget {
                       ),
                       ...reviews
                           .take(5)
-                          .map(
-                            (review) => ListTile(
-                              contentPadding: EdgeInsets.zero,
-                              leading: CircleAvatar(
-                                child: Text(review.rating.toString()),
-                              ),
-                              title: Text(review.customerName),
-                              subtitle: Text(
-                                review.comment.isEmpty
-                                    ? 'Rated ${review.rating} out of 5'
-                                    : review.comment,
-                              ),
-                            ),
-                          ),
+                          .map((review) => VerifiedReviewCard(review: review)),
                     ],
                   );
                 },
@@ -622,33 +618,40 @@ class _PublicProviderProfileScreenState
                 textAlign: TextAlign.center,
               ),
               const SizedBox(height: 20),
-              FutureBuilder<ReviewSummary>(
-                future: repository.getProviderReviewSummary(widget.providerId),
-                builder: (context, snapshot) {
-                  if (snapshot.connectionState == ConnectionState.waiting) {
-                    return const LinearProgressIndicator();
-                  }
-                  if (snapshot.hasError) {
-                    return Text(friendlyError(snapshot.error!));
-                  }
-                  final summary = snapshot.data;
-                  return Card(
-                    child: ListTile(
-                      leading: const Icon(Icons.star_outline),
-                      title: Text(
-                        summary?.hasReviews == true
-                            ? '${summary!.average!.toStringAsFixed(1)} out of 5'
-                            : 'No verified rating yet',
-                      ),
-                      subtitle: Text(
-                        summary?.hasReviews == true
-                            ? '${summary!.count} verified customer reviews'
-                            : 'A rating appears after a completed booking is reviewed.',
+              ref
+                  .watch(providerReviewSummaryProvider(widget.providerId))
+                  .when(
+                    loading: () => const LinearProgressIndicator(),
+                    error: (error, stack) => Card(
+                      child: ListTile(
+                        leading: const Icon(Icons.warning_amber_outlined),
+                        title: const Text('Verified rating unavailable'),
+                        subtitle: Text(friendlyError(error)),
+                        trailing: IconButton(
+                          tooltip: 'Retry rating',
+                          onPressed: () => ref.invalidate(
+                            providerReviewSummaryProvider(widget.providerId),
+                          ),
+                          icon: const Icon(Icons.refresh),
+                        ),
                       ),
                     ),
-                  );
-                },
-              ),
+                    data: (summary) => Card(
+                      child: ListTile(
+                        leading: const Icon(Icons.star_outline),
+                        title: Text(
+                          summary.hasReviews
+                              ? '${summary.average!.toStringAsFixed(1)} out of 5'
+                              : 'No verified rating yet',
+                        ),
+                        subtitle: Text(
+                          summary.hasReviews
+                              ? '${summary.count} verified customer reviews'
+                              : 'A rating appears after a completed booking is reviewed.',
+                        ),
+                      ),
+                    ),
+                  ),
               const SizedBox(height: 16),
               Text('About', style: Theme.of(context).textTheme.titleLarge),
               const SizedBox(height: 6),
@@ -727,18 +730,7 @@ class _PublicProviderProfileScreenState
                   return Column(
                     children: [
                       ...snapshot.data!.map(
-                        (review) => ListTile(
-                          contentPadding: EdgeInsets.zero,
-                          leading: CircleAvatar(
-                            child: Text('${review.rating}'),
-                          ),
-                          title: Text(review.customerName),
-                          subtitle: Text(
-                            review.comment.isEmpty
-                                ? 'Rated ${review.rating} out of 5'
-                                : review.comment,
-                          ),
-                        ),
+                        (review) => VerifiedReviewCard(review: review),
                       ),
                       if (snapshot.data!.length >= _reviewLimit)
                         OutlinedButton(
@@ -827,7 +819,7 @@ class _CreateBookingScreenState extends ConsumerState<CreateBookingScreen> {
             'landmark': _landmark.text.trim(),
             'notes': _notes.text.trim(),
           });
-      if (mounted) context.go('/booking/${result['id']}');
+      if (mounted) context.pushReplacement('/booking/${result['id']}');
     } catch (error) {
       if (mounted) showMessage(context, friendlyError(error), error: true);
     } finally {
@@ -938,6 +930,34 @@ class _CreateBookingScreenState extends ConsumerState<CreateBookingScreen> {
                     maxLines: 4,
                     decoration: const InputDecoration(
                       labelText: 'Describe the work (optional)',
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  Text(
+                    'Payment',
+                    style: Theme.of(context).textTheme.titleMedium,
+                  ),
+                  const SizedBox(height: 8),
+                  const Card(
+                    child: Column(
+                      children: [
+                        ListTile(
+                          leading: Icon(Icons.check_circle),
+                          title: Text('Cash after service'),
+                          subtitle: Text(
+                            'The customer confirms cash payment when accepting completion.',
+                          ),
+                        ),
+                        Divider(height: 1),
+                        ListTile(
+                          enabled: false,
+                          leading: Icon(Icons.credit_card_outlined),
+                          title: Text('Online payment — coming later'),
+                          subtitle: Text(
+                            'No gateway is connected, so FixMate will not collect card or mobile-wallet details.',
+                          ),
+                        ),
+                      ],
                     ),
                   ),
                   const SizedBox(height: 16),

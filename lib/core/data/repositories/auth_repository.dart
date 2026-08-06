@@ -74,8 +74,16 @@ class AuthRepository {
     await user.sendEmailVerification();
   }
 
-  Future<void> reloadUser() async {
-    await _auth.currentUser?.reload();
+  Future<User> reloadUser() async {
+    final user = _auth.currentUser;
+    if (user == null) throw StateError('No signed-in user.');
+    return reloadAndRefreshIdToken<User>(
+      reload: user.reload,
+      refreshedUser: () => _auth.currentUser,
+      forceRefreshIdToken: (refreshed) async {
+        await refreshed.getIdTokenResult(true);
+      },
+    );
   }
 
   Future<void> updateBasicProfile({
@@ -104,4 +112,21 @@ class AuthRepository {
   }
 
   Future<void> signOut() => _auth.signOut();
+}
+
+/// Reloads an authentication user and then refreshes the ID token belonging to
+/// the newly exposed current-user instance.
+///
+/// The generic callbacks keep the ordering independently testable without a
+/// Firebase emulator or a mocked platform channel.
+Future<T> reloadAndRefreshIdToken<T>({
+  required Future<void> Function() reload,
+  required T? Function() refreshedUser,
+  required Future<void> Function(T user) forceRefreshIdToken,
+}) async {
+  await reload();
+  final user = refreshedUser();
+  if (user == null) throw StateError('Your session expired. Sign in again.');
+  await forceRefreshIdToken(user);
+  return user;
 }

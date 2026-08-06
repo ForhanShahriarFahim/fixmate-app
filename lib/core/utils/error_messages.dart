@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:firebase_auth/firebase_auth.dart';
 
 String friendlyError(Object error) {
@@ -7,6 +9,8 @@ String friendlyError(Object error) {
       case 'wrong-password':
       case 'user-not-found':
         return 'Email or password is incorrect.';
+      case 'invalid-email':
+        return 'Enter a valid email address.';
       case 'email-already-in-use':
         return 'An account already uses this email.';
       case 'weak-password':
@@ -19,8 +23,10 @@ String friendlyError(Object error) {
         return 'This account has been disabled. Contact FixMate support.';
       case 'requires-recent-login':
         return 'For security, sign out and sign in again before continuing.';
+      case 'operation-not-allowed':
+        return 'Email sign-in is currently unavailable. Contact FixMate support.';
       default:
-        return error.message ?? 'Authentication failed.';
+        return 'Authentication failed. Please try again.';
     }
   }
   if (error is FirebaseException) {
@@ -42,6 +48,9 @@ String friendlyError(Object error) {
   }
   if (error is ArgumentError || error is StateError) {
     return error.toString().split(': ').last;
+  }
+  if (error is TimeoutException) {
+    return 'The request timed out. Check your connection and try again.';
   }
   return 'Something went wrong. Please try again.';
 }

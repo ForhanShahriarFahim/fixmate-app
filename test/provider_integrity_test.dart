@@ -1,5 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:fixmate/core/domain/models.dart';
+import 'package:fixmate/features/shared/shared_screens.dart';
 
 void main() {
   ProviderProfile profile({
@@ -48,5 +49,27 @@ void main() {
     const reviewed = ReviewSummary(count: 2, average: 4.5);
     expect(empty.hasReviews, isFalse);
     expect(reviewed.hasReviews, isTrue);
+  });
+
+  test('provider entry state follows the persisted approval profile', () {
+    expect(resolveProviderEntryState(null), ProviderEntryState.onboarding);
+    expect(
+      resolveProviderEntryState(
+        profile(approval: ProviderApprovalStatus.pending, visible: false),
+      ),
+      ProviderEntryState.pending,
+    );
+    expect(
+      resolveProviderEntryState(
+        profile(approval: ProviderApprovalStatus.rejected, visible: false),
+      ),
+      ProviderEntryState.rejected,
+    );
+    expect(
+      resolveProviderEntryState(
+        profile(approval: ProviderApprovalStatus.approved, visible: true),
+      ),
+      ProviderEntryState.dashboard,
+    );
   });
 }

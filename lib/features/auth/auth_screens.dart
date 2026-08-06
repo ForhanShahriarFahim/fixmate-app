@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -8,14 +10,75 @@ import 'package:fixmate/core/utils/error_messages.dart';
 import 'package:fixmate/core/utils/validators.dart';
 import 'package:fixmate/core/widgets/common_widgets.dart';
 
-class SessionGateScreen extends ConsumerWidget {
+class SessionGateScreen extends ConsumerStatefulWidget {
   const SessionGateScreen({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<SessionGateScreen> createState() => _SessionGateScreenState();
+}
+
+class _SessionGateScreenState extends ConsumerState<SessionGateScreen> {
+  Timer? _slowTimer;
+  bool _takingLonger = false;
+  bool _signingOut = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _startSlowTimer();
+  }
+
+  @override
+  void dispose() {
+    _slowTimer?.cancel();
+    super.dispose();
+  }
+
+  void _startSlowTimer() {
+    _slowTimer?.cancel();
+    _slowTimer = Timer(const Duration(seconds: 12), () {
+      if (mounted) setState(() => _takingLonger = true);
+    });
+  }
+
+  void _retry() {
+    setState(() => _takingLonger = false);
+    _startSlowTimer();
+    ref.invalidate(authStateProvider);
+    ref.invalidate(authenticatedSessionReadyProvider);
+    ref.invalidate(currentAdminMembershipProvider);
+    ref.invalidate(currentUserProfileProvider);
+  }
+
+  Future<void> _returnToSignIn() async {
+    if (_signingOut) return;
+    setState(() => _signingOut = true);
+    try {
+      await ref.read(signOutActionProvider)();
+      if (mounted) context.go('/login');
+    } catch (error) {
+      if (mounted) {
+        setState(() => _signingOut = false);
+        showMessage(context, friendlyError(error), error: true);
+      }
+    }
+  }
+
+  Widget _loading(String stageLabel) => Scaffold(
+    body: StartupLoadingView(
+      stageLabel: stageLabel,
+      takingLonger: _takingLonger,
+      signingOut: _signingOut,
+      onRetry: _retry,
+      onReturnToSignIn: _returnToSignIn,
+    ),
+  );
+
+  @override
+  Widget build(BuildContext context) {
     final auth = ref.watch(authStateProvider);
     return auth.when(
-      loading: () => const Scaffold(body: LoadingView()),
+      loading: () => _loading('sign-in session'),
       error: (error, stack) =>
           Scaffold(body: ErrorView(message: friendlyError(error))),
       data: (user) {
@@ -23,42 +86,301 @@ class SessionGateScreen extends ConsumerWidget {
           WidgetsBinding.instance.addPostFrameCallback(
             (_) => context.go('/login'),
           );
-          return const Scaffold(body: LoadingView());
+          return _loading('sign-in screen');
         }
         if (!user.emailVerified) {
           WidgetsBinding.instance.addPostFrameCallback(
             (_) => context.go('/verify-email'),
           );
-          return const Scaffold(body: LoadingView());
+          return _loading('email verification');
         }
-        final profile = ref.watch(currentUserProfileProvider);
-        return profile.when(
-          loading: () => const Scaffold(body: LoadingView()),
-          error: (error, stack) =>
-              Scaffold(body: ErrorView(message: friendlyError(error))),
-          data: (value) {
-            if (value == null) {
-              return const Scaffold(
-                body: ErrorView(
-                  message: 'Your FixMate profile is missing. Contact support.',
-                ),
-              );
-            }
-            if (value.status != AccountStatus.active) {
-              return AccountRestrictedScreen(profile: value);
-            }
-            final path = value.role == UserRole.customer
-                ? '/customer'
-                : '/provider';
-            WidgetsBinding.instance.addPostFrameCallback(
-              (_) => context.go(path),
+        final session = ref.watch(authenticatedSessionReadyProvider);
+        return session.when(
+          loading: () => _loading('secure sign-in session'),
+          error: (error, stack) => ProfileLoadErrorScreen(
+            error: error,
+            onRetry: () => ref.invalidate(authenticatedSessionReadyProvider),
+          ),
+          data: (_) {
+            final admin = ref.watch(currentAdminMembershipProvider);
+            return admin.when(
+              loading: () => _loading('administrator access'),
+              error: (error, stack) => ProfileLoadErrorScreen(
+                error: error,
+                onRetry: () => ref.invalidate(currentAdminMembershipProvider),
+              ),
+              data: (membership) {
+                if (membership?.active == true) {
+                  WidgetsBinding.instance.addPostFrameCallback(
+                    (_) => context.go('/admin'),
+                  );
+                  return _loading('administrator dashboard');
+                }
+                final profile = ref.watch(currentUserProfileProvider);
+                return profile.when(
+                  loading: () => _loading('account profile'),
+                  error: (error, stack) => ProfileLoadErrorScreen(
+                    error: error,
+                    onRetry: () => ref.invalidate(currentUserProfileProvider),
+                  ),
+                  data: (value) {
+                    if (value == null) {
+                      return MissingProfileRecoveryScreen(
+                        onRetry: () {
+                          ref.invalidate(currentAdminMembershipProvider);
+                          ref.invalidate(currentUserProfileProvider);
+                        },
+                      );
+                    }
+                    if (value.status != AccountStatus.active) {
+                      return AccountRestrictedScreen(profile: value);
+                    }
+                    final path = value.role == UserRole.customer
+                        ? '/customer'
+                        : '/provider';
+                    WidgetsBinding.instance.addPostFrameCallback(
+                      (_) => context.go(path),
+                    );
+                    return _loading('account dashboard');
+                  },
+                );
+              },
             );
-            return const Scaffold(body: LoadingView());
           },
         );
       },
     );
   }
+}
+
+class StartupLoadingView extends StatelessWidget {
+  const StartupLoadingView({
+    required this.stageLabel,
+    required this.takingLonger,
+    required this.signingOut,
+    required this.onRetry,
+    required this.onReturnToSignIn,
+    super.key,
+  });
+
+  final String stageLabel;
+  final bool takingLonger;
+  final bool signingOut;
+  final VoidCallback onRetry;
+  final VoidCallback onReturnToSignIn;
+
+  @override
+  Widget build(BuildContext context) => SafeArea(
+    child: Center(
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.all(28),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 440),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                Icons.home_repair_service,
+                size: 64,
+                color: Theme.of(context).colorScheme.primary,
+              ),
+              const SizedBox(height: 18),
+              Text(
+                'FixMate',
+                style: Theme.of(context).textTheme.headlineMedium,
+              ),
+              const SizedBox(height: 18),
+              const CircularProgressIndicator(),
+              const SizedBox(height: 18),
+              Text(
+                takingLonger
+                    ? 'FixMate is still waiting for Firebase to confirm your $stageLabel.'
+                    : 'Checking your $stageLabel…',
+                textAlign: TextAlign.center,
+              ),
+              if (takingLonger) ...[
+                const SizedBox(height: 8),
+                const Text(
+                  'Check your internet connection, then retry. If this session is stale, return to sign in safely.',
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: 18),
+                FilledButton.icon(
+                  onPressed: signingOut ? null : onRetry,
+                  icon: const Icon(Icons.refresh),
+                  label: const Text('Try again'),
+                ),
+                TextButton.icon(
+                  onPressed: signingOut ? null : onReturnToSignIn,
+                  icon: signingOut
+                      ? const SizedBox.square(
+                          dimension: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.login),
+                  label: Text(signingOut ? 'Returning…' : 'Return to sign in'),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+    ),
+  );
+}
+
+class MissingProfileRecoveryScreen extends ConsumerStatefulWidget {
+  const MissingProfileRecoveryScreen({this.onRetry, super.key});
+
+  final VoidCallback? onRetry;
+
+  @override
+  ConsumerState<MissingProfileRecoveryScreen> createState() =>
+      _MissingProfileRecoveryScreenState();
+}
+
+class _MissingProfileRecoveryScreenState
+    extends ConsumerState<MissingProfileRecoveryScreen> {
+  bool _returningToSignIn = false;
+
+  Future<void> _returnToSignIn() async {
+    if (_returningToSignIn) return;
+    setState(() => _returningToSignIn = true);
+    try {
+      await ref.read(signOutActionProvider)();
+      if (mounted) context.go('/login');
+    } catch (error) {
+      if (mounted) {
+        setState(() => _returningToSignIn = false);
+        showMessage(context, friendlyError(error), error: true);
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => PopScope(
+    canPop: false,
+    onPopInvokedWithResult: (didPop, result) {
+      if (!didPop) unawaited(_returnToSignIn());
+    },
+    child: Scaffold(
+      appBar: AppBar(
+        automaticallyImplyLeading: false,
+        title: const Text('Complete account setup'),
+      ),
+      body: SafeArea(
+        child: Center(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.all(24),
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 520),
+              child: Column(
+                children: [
+                  Icon(
+                    Icons.manage_accounts_outlined,
+                    size: 64,
+                    color: Theme.of(context).colorScheme.primary,
+                  ),
+                  const SizedBox(height: 18),
+                  Text(
+                    'Your FixMate account setup is incomplete',
+                    style: Theme.of(context).textTheme.headlineSmall,
+                    textAlign: TextAlign.center,
+                  ),
+                  const SizedBox(height: 12),
+                  const Text(
+                    'You signed in successfully, but the FixMate profile for this account could not be found. Return to sign in and use another account, or contact FixMate support if this account should have a profile.',
+                    textAlign: TextAlign.center,
+                  ),
+                  if (widget.onRetry != null) ...[
+                    const SizedBox(height: 18),
+                    OutlinedButton.icon(
+                      onPressed: _returningToSignIn ? null : widget.onRetry,
+                      icon: const Icon(Icons.refresh),
+                      label: const Text('Check again'),
+                    ),
+                  ],
+                  const SizedBox(height: 12),
+                  FilledButton.icon(
+                    onPressed: _returningToSignIn ? null : _returnToSignIn,
+                    icon: const Icon(Icons.login),
+                    label: Text(
+                      _returningToSignIn ? 'Signing out…' : 'Return to sign in',
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  const Text(
+                    'Support: fixmatebd.support@gmail.com',
+                    textAlign: TextAlign.center,
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    ),
+  );
+}
+
+class ProfileLoadErrorScreen extends ConsumerWidget {
+  const ProfileLoadErrorScreen({
+    required this.error,
+    required this.onRetry,
+    super.key,
+  });
+
+  final Object error;
+  final VoidCallback onRetry;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) => Scaffold(
+    appBar: AppBar(
+      automaticallyImplyLeading: false,
+      title: const Text('Account temporarily unavailable'),
+    ),
+    body: SafeArea(
+      child: Center(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.all(24),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 520),
+            child: Column(
+              children: [
+                Icon(
+                  Icons.cloud_off_outlined,
+                  size: 60,
+                  color: Theme.of(context).colorScheme.error,
+                ),
+                const SizedBox(height: 16),
+                Text(
+                  'FixMate could not load your account',
+                  style: Theme.of(context).textTheme.headlineSmall,
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: 10),
+                Text(friendlyError(error), textAlign: TextAlign.center),
+                const SizedBox(height: 20),
+                FilledButton.icon(
+                  onPressed: onRetry,
+                  icon: const Icon(Icons.refresh),
+                  label: const Text('Retry'),
+                ),
+                const SizedBox(height: 10),
+                TextButton(
+                  onPressed: () async {
+                    await ref.read(signOutActionProvider)();
+                    if (context.mounted) context.go('/login');
+                  },
+                  child: const Text('Return to sign in'),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    ),
+  );
 }
 
 class AccountRestrictedScreen extends ConsumerWidget {
@@ -73,52 +395,54 @@ class AccountRestrictedScreen extends ConsumerWidget {
         profile.status == AccountStatus.deleted;
     return Scaffold(
       appBar: AppBar(title: const Text('FixMate account')),
-      body: Center(
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 520),
-          child: Padding(
+      body: SafeArea(
+        child: Center(
+          child: SingleChildScrollView(
             padding: const EdgeInsets.all(24),
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Icon(
-                  deletionPending ? Icons.delete_outline : Icons.lock_outline,
-                  size: 64,
-                  color: Theme.of(context).colorScheme.primary,
-                ),
-                const SizedBox(height: 18),
-                Text(
-                  deletionPending
-                      ? 'Account deletion requested'
-                      : 'Account suspended',
-                  style: Theme.of(context).textTheme.headlineSmall,
-                  textAlign: TextAlign.center,
-                ),
-                const SizedBox(height: 10),
-                if (deletionPending)
-                  StreamBuilder<DeletionRequest?>(
-                    stream: ref
-                        .read(marketplaceRepositoryProvider)
-                        .watchDeletionRequest(profile.id),
-                    builder: (context, snapshot) => Text(
-                      _deletionStatusMessage(snapshot.data?.status),
-                      textAlign: TextAlign.center,
-                    ),
-                  )
-                else
-                  const Text(
-                    'Marketplace actions are disabled. Contact fixmatebd.support@gmail.com if you believe this is a mistake.',
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 520),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(
+                    deletionPending ? Icons.delete_outline : Icons.lock_outline,
+                    size: 64,
+                    color: Theme.of(context).colorScheme.primary,
+                  ),
+                  const SizedBox(height: 18),
+                  Text(
+                    deletionPending
+                        ? 'Account deletion requested'
+                        : 'Account suspended',
+                    style: Theme.of(context).textTheme.headlineSmall,
                     textAlign: TextAlign.center,
                   ),
-                const SizedBox(height: 22),
-                FilledButton.icon(
-                  onPressed: () async {
-                    await ref.read(authRepositoryProvider).signOut();
-                  },
-                  icon: const Icon(Icons.logout),
-                  label: const Text('Sign out'),
-                ),
-              ],
+                  const SizedBox(height: 10),
+                  if (deletionPending)
+                    StreamBuilder<DeletionRequest?>(
+                      stream: ref
+                          .read(marketplaceRepositoryProvider)
+                          .watchDeletionRequest(profile.id),
+                      builder: (context, snapshot) => Text(
+                        _deletionStatusMessage(snapshot.data?.status),
+                        textAlign: TextAlign.center,
+                      ),
+                    )
+                  else
+                    const Text(
+                      'Marketplace actions are disabled. Contact fixmatebd.support@gmail.com if you believe this is a mistake.',
+                      textAlign: TextAlign.center,
+                    ),
+                  const SizedBox(height: 22),
+                  FilledButton.icon(
+                    onPressed: () async {
+                      await ref.read(signOutActionProvider)();
+                    },
+                    icon: const Icon(Icons.logout),
+                    label: const Text('Sign out'),
+                  ),
+                ],
+              ),
             ),
           ),
         ),
@@ -161,12 +485,14 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
   }
 
   Future<void> _submit() async {
+    if (_loading) return;
     if (!_formKey.currentState!.validate()) return;
     setState(() => _loading = true);
     try {
-      await ref
-          .read(authRepositoryProvider)
-          .signIn(email: _email.text, password: _password.text);
+      await ref.read(signInActionProvider)(
+        email: _email.text,
+        password: _password.text,
+      );
       if (mounted) context.go('/');
     } catch (error) {
       if (mounted) showMessage(context, friendlyError(error), error: true);
@@ -226,6 +552,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                       prefixIcon: const Icon(Icons.lock_outline),
                       suffixIcon: IconButton(
                         onPressed: () => setState(() => _obscure = !_obscure),
+                        tooltip: _obscure ? 'Show password' : 'Hide password',
                         icon: Icon(
                           _obscure
                               ? Icons.visibility_outlined
@@ -468,25 +795,28 @@ class _ForgotPasswordScreenState extends ConsumerState<ForgotPasswordScreen> {
   @override
   Widget build(BuildContext context) => Scaffold(
     appBar: AppBar(title: const Text('Reset password')),
-    body: Padding(
-      padding: const EdgeInsets.all(24),
-      child: Column(
-        children: [
-          const Text(
-            'Enter your account email. We will send you a password reset link.',
-          ),
-          const SizedBox(height: 20),
-          TextField(
-            controller: _email,
-            keyboardType: TextInputType.emailAddress,
-            decoration: const InputDecoration(labelText: 'Email'),
-          ),
-          const SizedBox(height: 20),
-          FilledButton(
-            onPressed: _loading ? null : _send,
-            child: Text(_loading ? 'Sending…' : 'Send reset email'),
-          ),
-        ],
+    body: SafeArea(
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const Text(
+              'Enter your account email. We will send you a password reset link.',
+            ),
+            const SizedBox(height: 20),
+            TextField(
+              controller: _email,
+              keyboardType: TextInputType.emailAddress,
+              decoration: const InputDecoration(labelText: 'Email'),
+            ),
+            const SizedBox(height: 20),
+            FilledButton(
+              onPressed: _loading ? null : _send,
+              child: Text(_loading ? 'Sending…' : 'Send reset email'),
+            ),
+          ],
+        ),
       ),
     ),
   );
@@ -504,14 +834,14 @@ class _VerifyEmailScreenState extends ConsumerState<VerifyEmailScreen> {
   Future<void> _check() async {
     setState(() => _loading = true);
     try {
-      await ref.read(authRepositoryProvider).reloadUser();
-      final user = ref.read(firebaseAuthProvider).currentUser;
-      if (user?.emailVerified == true && mounted) {
-        ref.invalidate(authStateProvider);
+      final verified = await ref.read(emailVerificationRefresherProvider)();
+      if (verified && mounted) {
         context.go('/');
       } else if (mounted) {
         showMessage(context, 'Email is not verified yet.', error: true);
       }
+    } catch (error) {
+      if (mounted) showMessage(context, friendlyError(error), error: true);
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -523,50 +853,60 @@ class _VerifyEmailScreenState extends ConsumerState<VerifyEmailScreen> {
     return Scaffold(
       body: SafeArea(
         child: Center(
-          child: Padding(
+          child: SingleChildScrollView(
             padding: const EdgeInsets.all(28),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(
-                  Icons.mark_email_unread_outlined,
-                  size: 68,
-                  color: Theme.of(context).colorScheme.primary,
-                ),
-                const SizedBox(height: 20),
-                Text(
-                  'Verify your email',
-                  style: Theme.of(context).textTheme.headlineSmall,
-                ),
-                const SizedBox(height: 12),
-                Text(
-                  'We sent a verification link to $email. Open it, then return here.',
-                  textAlign: TextAlign.center,
-                ),
-                const SizedBox(height: 24),
-                FilledButton(
-                  onPressed: _loading ? null : _check,
-                  child: Text(
-                    _loading ? 'Checking…' : 'I have verified my email',
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 520),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    Icons.mark_email_unread_outlined,
+                    size: 68,
+                    color: Theme.of(context).colorScheme.primary,
                   ),
-                ),
-                TextButton(
-                  onPressed: () async {
-                    await ref.read(authRepositoryProvider).resendVerification();
-                    if (context.mounted) {
-                      showMessage(context, 'Verification email sent again.');
-                    }
-                  },
-                  child: const Text('Resend email'),
-                ),
-                TextButton(
-                  onPressed: () async {
-                    await ref.read(authRepositoryProvider).signOut();
-                    if (context.mounted) context.go('/login');
-                  },
-                  child: const Text('Use another account'),
-                ),
-              ],
+                  const SizedBox(height: 20),
+                  Text(
+                    'Verify your email',
+                    style: Theme.of(context).textTheme.headlineSmall,
+                  ),
+                  const SizedBox(height: 12),
+                  Text(
+                    'We sent a verification link to $email. Open it, then return here.',
+                    textAlign: TextAlign.center,
+                  ),
+                  const SizedBox(height: 12),
+                  const Text(
+                    'Firebase creates the sign-in account before sending this email. Until verification succeeds, FixMate blocks marketplace access, provider applications, bookings, chat, reviews, and reports.',
+                    textAlign: TextAlign.center,
+                  ),
+                  const SizedBox(height: 24),
+                  FilledButton(
+                    onPressed: _loading ? null : _check,
+                    child: Text(
+                      _loading ? 'Checking…' : 'I have verified my email',
+                    ),
+                  ),
+                  TextButton(
+                    onPressed: () async {
+                      await ref
+                          .read(authRepositoryProvider)
+                          .resendVerification();
+                      if (context.mounted) {
+                        showMessage(context, 'Verification email sent again.');
+                      }
+                    },
+                    child: const Text('Resend email'),
+                  ),
+                  TextButton(
+                    onPressed: () async {
+                      await ref.read(signOutActionProvider)();
+                      if (context.mounted) context.go('/login');
+                    },
+                    child: const Text('Use another account'),
+                  ),
+                ],
+              ),
             ),
           ),
         ),

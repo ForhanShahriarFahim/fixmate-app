@@ -11,6 +11,10 @@ import 'package:fixmate/core/utils/error_messages.dart';
 import 'package:fixmate/core/utils/formatters.dart';
 import 'package:fixmate/core/widgets/common_widgets.dart';
 
+String bookingListDestination(UserRole role) => role == UserRole.provider
+    ? '/provider?tab=bookings'
+    : '/customer?tab=bookings';
+
 class BookingListScreen extends ConsumerStatefulWidget {
   const BookingListScreen({super.key});
 
@@ -89,7 +93,7 @@ class BookingDetailScreen extends ConsumerWidget {
   const BookingDetailScreen({required this.bookingId, super.key});
   final String bookingId;
 
-  Future<void> _act(
+  Future<bool> _act(
     BuildContext context,
     WidgetRef ref,
     String function,
@@ -109,11 +113,13 @@ class BookingDetailScreen extends ConsumerWidget {
         Navigator.of(context, rootNavigator: true).pop();
         showMessage(context, 'Booking updated.');
       }
+      return true;
     } catch (error) {
       if (context.mounted) {
         Navigator.of(context, rootNavigator: true).pop();
         showMessage(context, friendlyError(error), error: true);
       }
+      return false;
     }
   }
 
@@ -179,7 +185,11 @@ class BookingDetailScreen extends ConsumerWidget {
     });
   }
 
-  Future<void> _review(BuildContext context, WidgetRef ref) async {
+  Future<void> _review(
+    BuildContext context,
+    WidgetRef ref,
+    String providerId,
+  ) async {
     var rating = 5;
     final comment = TextEditingController();
     final submitted = await showDialog<bool>(
@@ -229,11 +239,14 @@ class BookingDetailScreen extends ConsumerWidget {
       ),
     );
     if (submitted == true && context.mounted) {
-      await _act(context, ref, 'submitReview', <String, dynamic>{
+      final saved = await _act(context, ref, 'submitReview', <String, dynamic>{
         'bookingId': bookingId,
         'rating': rating,
         'comment': comment.text.trim(),
       });
+      if (saved) {
+        ref.invalidate(providerReviewSummaryProvider(providerId));
+      }
     }
     comment.dispose();
   }
@@ -358,10 +371,27 @@ class BookingDetailScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final bookingAsync = ref.watch(bookingProvider(bookingId));
+    final profile = ref.watch(currentUserProfileProvider).value;
     final currentUid = FirebaseAuth.instance.currentUser?.uid;
+    final fallbackRoute = bookingListDestination(
+      profile?.role ?? UserRole.customer,
+    );
     return Scaffold(
       appBar: AppBar(
         title: const Text('Booking details'),
+        leading: IconButton(
+          tooltip: context.canPop() ? 'Back' : 'Return to bookings',
+          onPressed: () {
+            if (context.canPop()) {
+              context.pop();
+            } else {
+              context.go(fallbackRoute);
+            }
+          },
+          icon: Icon(
+            context.canPop() ? Icons.arrow_back : Icons.calendar_month_outlined,
+          ),
+        ),
         actions: [
           bookingAsync.value == null
               ? const SizedBox.shrink()
@@ -444,6 +474,18 @@ class BookingDetailScreen extends ConsumerWidget {
                   ),
                 ),
               ),
+              const SizedBox(height: 10),
+              Card(
+                child: ListTile(
+                  leading: const Icon(Icons.account_balance_wallet_outlined),
+                  title: const Text('Payment method: Cash'),
+                  subtitle: Text(
+                    booking.status == BookingStatus.completed
+                        ? 'The customer confirmed ${formatBdt(booking.priceBdt)} was paid in cash.'
+                        : 'Pay ${formatBdt(booking.priceBdt)} in cash after the work is completed. Online payment is planned but no payment gateway is connected yet.',
+                  ),
+                ),
+              ),
               if (booking.notes.isNotEmpty) ...[
                 const SizedBox(height: 10),
                 Text(
@@ -465,6 +507,58 @@ class BookingDetailScreen extends ConsumerWidget {
                 ),
               ],
               const SizedBox(height: 18),
+              if (isCustomer && booking.status == BookingStatus.completed) ...[
+                StreamBuilder<ServiceReview?>(
+                  stream: ref
+                      .read(marketplaceRepositoryProvider)
+                      .watchBookingReview(booking.id),
+                  builder: (context, snapshot) {
+                    if (snapshot.hasError) {
+                      return Card(
+                        child: ListTile(
+                          leading: const Icon(Icons.error_outline),
+                          title: const Text('Review status unavailable'),
+                          subtitle: Text(friendlyError(snapshot.error!)),
+                          trailing: IconButton(
+                            tooltip: 'Retry review status',
+                            onPressed: () =>
+                                ref.invalidate(bookingProvider(booking.id)),
+                            icon: const Icon(Icons.refresh),
+                          ),
+                        ),
+                      );
+                    }
+                    if (!snapshot.hasData &&
+                        snapshot.connectionState == ConnectionState.waiting) {
+                      return const LinearProgressIndicator();
+                    }
+                    final review = snapshot.data;
+                    if (review != null) {
+                      return Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Your review',
+                            style: Theme.of(context).textTheme.titleMedium,
+                          ),
+                          const SizedBox(height: 6),
+                          VerifiedReviewCard(review: review),
+                          const Text(
+                            'Each completed booking can be reviewed once. Published reviews cannot be edited in this release.',
+                          ),
+                        ],
+                      );
+                    }
+                    return OutlinedButton.icon(
+                      onPressed: () =>
+                          _review(context, ref, booking.providerId),
+                      icon: const Icon(Icons.star_outline),
+                      label: const Text('Leave a review'),
+                    );
+                  },
+                ),
+                const SizedBox(height: 12),
+              ],
               ..._actions(context, ref, booking, isCustomer),
               const SizedBox(height: 24),
               Text(
@@ -497,6 +591,16 @@ class BookingDetailScreen extends ConsumerWidget {
                         .toList(),
                   );
                 },
+              ),
+              const SizedBox(height: 20),
+              OutlinedButton.icon(
+                onPressed: () => context.go(
+                  bookingListDestination(
+                    isCustomer ? UserRole.customer : UserRole.provider,
+                  ),
+                ),
+                icon: const Icon(Icons.arrow_back),
+                label: const Text('Return to bookings'),
               ),
             ],
           );
@@ -619,15 +723,6 @@ class BookingDetailScreen extends ConsumerWidget {
               ),
             ),
           ],
-        ),
-      );
-    }
-    if (isCustomer && booking.status == BookingStatus.completed) {
-      actions.add(
-        OutlinedButton.icon(
-          onPressed: () => _review(context, ref),
-          icon: const Icon(Icons.star_outline),
-          label: const Text('Leave a review'),
         ),
       );
     }

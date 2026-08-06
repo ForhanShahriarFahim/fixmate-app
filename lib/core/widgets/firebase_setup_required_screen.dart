@@ -30,8 +30,8 @@ class FirebaseSetupRequiredScreen extends StatelessWidget {
                 Text(
                   message ??
                       'Firebase client configuration is missing or invalid. '
-                          'Use the matching android/app/google-services.json for Android and the generated web section in '
-                          'lib/core/firebase/firebase_options.dart, then rebuild FixMate.',
+                          'Use the matching android/app/google-services.json and '
+                          'lib/core/firebase/firebase_options.dart for the registered Android app, then rebuild FixMate.',
                   textAlign: TextAlign.center,
                 ),
                 const SizedBox(height: 20),
@@ -39,7 +39,7 @@ class FirebaseSetupRequiredScreen extends StatelessWidget {
                   child: Padding(
                     padding: EdgeInsets.all(18),
                     child: Text(
-                      'Required Firebase products: Authentication and Firestore. Android also initializes App Check and Crashlytics. '
+                      'Required Firebase products: Authentication and Firestore. FixMate also initializes Crashlytics and supports App Check after it is registered. '
                       'Keep the project on the no-cost Spark plan and App Check enforcement disabled until verified.',
                     ),
                   ),

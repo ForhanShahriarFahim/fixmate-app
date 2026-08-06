@@ -1,165 +1,200 @@
-# FixMate — Firebase Spark Edition
+# FixMate
 
-FixMate is a Flutter marketplace for booking approved home-service providers
-across Bangladesh. Android remains the release target, and a Firebase-connected
-web build is included for FlutLab Web preview and browser testing. This edition
-is intentionally designed for the no-cost Firebase **Spark** plan and direct
-GitHub import into [FlutLab](https://flutlab.io/).
+[![CI](https://github.com/ForhanShahriarFahim/fixmate-app/actions/workflows/ci.yml/badge.svg)](https://github.com/ForhanShahriarFahim/fixmate-app/actions/workflows/ci.yml)
+[![Android release](https://github.com/ForhanShahriarFahim/fixmate-app/actions/workflows/android-release.yml/badge.svg)](https://github.com/ForhanShahriarFahim/fixmate-app/actions/workflows/android-release.yml)
+[![Latest release](https://img.shields.io/github/v/release/ForhanShahriarFahim/fixmate-app?display_name=tag&sort=semver)](https://github.com/ForhanShahriarFahim/fixmate-app/releases/latest)
 
-## Included beta functionality
+FixMate is an Android home-service marketplace for Bangladesh, built with
+Flutter and Firebase Spark. Customers find approved providers and book fixed
+price services; providers manage listings and jobs; trusted administrators
+review provider applications and service categories.
 
-- Customer/provider email accounts, verification, immutable roles, adult and
-  Terms acceptance.
-- Provider applications with Firebase Console approval and up to ten service
-  areas.
-- Text-only service listings with fixed BDT prices and built-in category art.
-- Firestore-transaction booking lifecycle with deterministic provider slot
-  locks.
-- Contact privacy, calls after acceptance, real-time text chat, blocks, and
-  reports.
-- Cash completion, disputes, one review per booking, and dynamically calculated
-  reputation statistics.
-- Booking/message activity inside the app, App Check, Crashlytics, Firestore
-  Rules, indexes, emulator tests, legal pages, and a Play beta checklist.
+Android is the only supported application platform. Development and manual
+testing use a connected Android phone. Distribution uses signed APK files from
+GitHub Releases.
 
-## Spark plan limitations
+## Download
 
-No billing account or Blaze upgrade is required. This edition deliberately
-does not use Cloud Functions or Cloud Storage, so it does not include uploaded
-avatars/service covers, Android push delivery, scheduled jobs, or trigger-based
-aggregates. Account deletion creates one atomic, idempotent request and locks
-the account; an authorized administrator then performs the documented,
-restartable cleanup in Firebase Console. The client never claims that a
-request is already completed.
+- **Latest signed APK:** [Download FixMate for Android](https://github.com/ForhanShahriarFahim/fixmate-app/releases/latest/download/fixmate-android.apk)
+- **All versions:** [GitHub Releases](https://github.com/ForhanShahriarFahim/fixmate-app/releases)
+- **Development APK:** open a successful [CI run](https://github.com/ForhanShahriarFahim/fixmate-app/actions/workflows/ci.yml) and download its `fixmate-debug-<commit>` artifact.
 
-Firestore Security Rules are the authoritative backend validator. Every
-booking status change includes a matching append-only event, and accepting a
-booking atomically creates a unique `provider_slots` lock.
+The stable APK link becomes active when the first authorized version tag
+finishes the Android release workflow.
 
-## Repository layout
+## Features
+
+### Customer
+
+- Email/password registration, verification, login, reset, and deletion request.
+- Browse active services by category and Bangladesh coverage.
+- Book a future date and morning, afternoon, or evening window.
+- Track status and immutable booking-event history.
+- See contact details and use text chat only after provider acceptance.
+- Cancel eligible bookings, dispute completion, confirm cash payment, block or
+  report users, and leave one verified review per completed booking.
+
+### Provider
+
+- Submit a profile for administrator approval.
+- Create and manage fixed-price services after approval.
+- Accept or reject requests with date/window slot-conflict protection.
+- Start work, request completion, communicate with customers, and track
+  confirmed-cash earnings and booking statistics.
+- View completed work, verified ratings, and customer review history.
+
+### Administrator
+
+- Sign in through a trusted `admins/{uid}` Firestore membership; there is no
+  public administrator registration.
+- Review, approve, and reject provider applications with protected audit data.
+- Add, edit, activate, deactivate, and safely delete unused categories.
+- Category deletion requires deactivation and is blocked while any service
+  references the category.
+
+## Technology
+
+| Area | Implementation |
+|---|---|
+| Client | Flutter 3.44.8, Dart 3.12.2, Material 3 |
+| State/navigation | Riverpod without generation, `go_router` |
+| Backend | Firebase Authentication and Cloud Firestore on Spark |
+| Diagnostics | Crashlytics; optional debug App Check monitoring |
+| Android identity | `com.fixmatebd.app` |
+| Firebase project | `fixmate-ce36d`, Firestore `asia-south1` |
+| Integrity | Firestore Security Rules and transactional client writes |
+| Automation | GitHub Actions validation, APK artifacts, signed releases |
+
+Cloud Functions, Cloud Storage uploads, push notifications, and online payment
+gateways are deliberately outside this release. Activity is stored in-app, and
+payments are recorded as confirmed cash only.
+
+## Repository structure
 
 ```text
-android/                 Android package com.fixmatebd.app
-web/                     FlutLab Web/PWA entry point and metadata
-assets/                  Bangladesh division/district data
-lib/                     Flutter application
-functions/               Local seed and Firestore Rules test tooling only
-test/                    Flutter tests
-docs/                    GitHub Pages legal site
-firestore.rules          Spark marketplace authorization policy
-firestore.indexes.json   Required Firestore indexes
+fixmate-app/
+├── .github/workflows/       CI and signed GitHub Release automation
+├── android/                 Android runner and fail-closed release signing
+├── assets/data/             Bangladesh division/district reference data
+├── docs/                    Legal pages, runbooks, and release evidence
+├── functions/               Local seed tooling and Firestore Rules tests
+├── lib/
+│   ├── core/                Models, repositories, Firebase, routing, theme
+│   └── features/            Auth, admin, catalog, booking, provider, shared UI
+├── test/                    Unit, widget, repository, and navigation tests
+├── firestore.rules          Marketplace authorization and data integrity
+├── firestore.indexes.json   Eleven reviewed composite indexes
+├── firebase.json            Android Firebase and emulator configuration
+└── pubspec.yaml             Dart package and release version
 ```
 
-## 1. Connected no-cost Firebase project
+## Local Android development
 
-FixMate is configured for Firebase project `fixmate-ce36d` on the **Spark**
-plan. The registered Android package is `com.fixmatebd.app`, a dedicated
-FixMate web app is registered in the same project, and Firestore was created in
-`asia-south1` Mumbai. The official FlutterFire workflow generated Android and
-web client options and added the required Android Google Services and
-Crashlytics Gradle plugins.
+### Requirements
 
-Still complete or verify in Firebase Console:
+- Flutter 3.44.8 with Dart 3.12.2
+- Android SDK and an Android phone with USB debugging enabled
+- Java 21 for the Firestore Emulator
+- Node.js 22.12 or newer within the Node 22 line, plus npm, for Firebase
+  tooling tests
 
-1. Enable Email/Password in Authentication.
-2. Register the Android app for App Check. Keep enforcement off until genuine
-   debug/internal-test traffic has been verified.
-3. Verify Crashlytics with a deliberate non-fatal event from a test device.
+### Validate and run
 
-Do not enable Cloud Functions or Cloud Storage. The `storageBucket` value in a
-generated Firebase options file is harmless client metadata; the app does not
-call Firebase Storage.
+```powershell
+git clone https://github.com/ForhanShahriarFahim/fixmate-app.git
+cd fixmate-app
 
-## 2. Use Firebase in FlutLab
-
-1. Import the GitHub repository root.
-2. Confirm that `android/app/google-services.json` and
-   `lib/core/firebase/firebase_options.dart` are present after import. These
-   are non-secret Firebase client identifiers, not Admin credentials.
-3. Do not create a second Firebase app or replace the generated configuration
-   with values from another project.
-4. Select FlutLab's Flutter 3.41 builder (currently Flutter 3.41.7) and run
-   **Pub get** with the committed lockfile.
-5. For browser preview, open **Settings → Builder**, select `web-emulator`,
-   then run **Build Project** and open **Web Emulator**.
-
-FixMate already initializes Firebase in `main.dart`. App Check and Crashlytics
-remain Android-only in this release; App Check enforcement stays disabled.
-Do not replace the guarded initialization with a tutorial snippet.
-
-## 3. Deploy only Firestore configuration
-
-Install Firebase CLI, then run from the repository root:
-
-```console
-firebase login
-firebase projects:list
-npm --prefix functions run test:rules
-firebase deploy --project fixmate-ce36d --only firestore:rules
-firebase deploy --project fixmate-ce36d --only firestore:indexes
-```
-
-This deploy does not require Blaze. The repository intentionally has no
-`.firebaserc`, so every operator command must name `fixmate-ce36d` explicitly.
-The GitHub Actions workflow validates the repository but does not deploy it.
-
-## 4. Seed the six categories
-
-The `functions/` directory is local tooling and is not a deployable Functions
-backend:
-
-```console
-cd functions
-npm ci
-npm test
-gcloud auth application-default login
-npm run seed -- --project fixmate-ce36d
-gcloud auth application-default revoke
-```
-
-The seed creates electrical, plumbing, cleaning, AC repair, appliance repair,
-and painting categories with stable document IDs. It uses operator user
-Application Default Credentials; never substitute a downloaded service-account
-key. Obtain separate approval before running the seed against Firebase.
-
-## 5. Approve a provider
-
-1. Register a provider and verify the email.
-2. Complete the provider application.
-3. Open Firestore → `provider_profiles/{uid}`.
-4. Verify the supplied details and change `approvalStatus` from `pending` to
-   `approved`, then set `marketplaceVisible` to `true`.
-5. To suspend an account, first set `marketplaceVisible` to `false`, then
-   update `users/{uid}.status` to `suspended` through Firebase Console.
-
-See [docs/ADMIN_RUNBOOK.md](docs/ADMIN_RUNBOOK.md) for moderation, disputes,
-and deletion handling.
-
-## Verification
-
-```console
-cd functions
-npm test
-npm run test:rules
-```
-
-In an environment with Flutter:
-
-```console
 flutter pub get
 dart format --output=none --set-exit-if-changed lib test
 flutter analyze
 flutter test
-flutter build web --debug
+
+npm --prefix functions ci
+npm --prefix functions run lint
+npm --prefix functions test
+npm --prefix functions run test:rules
+
 flutter build apk --debug
+flutter devices
+flutter run -d <ANDROID_DEVICE_ID> --debug
 ```
 
-For Play upload, add `android/key.properties` and a private upload keystore
-through a secure local/FlutLab mechanism. Those files are intentionally ignored.
+The debug APK is written to
+`build/app/outputs/flutter-apk/app-debug.apk`. See
+[local Android development](docs/LOCAL_ANDROID_DEVELOPMENT.md) for device and
+troubleshooting guidance.
 
-## Legal URLs
+## Firebase configuration
 
-Application constants use
-`https://forhanshahriarfahim.github.io/fixmate-app/`, matching the configured
-GitHub repository owner. Reserve `fixmatebd.support@gmail.com` and manually
-verify every published link before internal testing.
+The tracked `android/app/google-services.json` and
+`lib/core/firebase/firebase_options.dart` identify the public Android Firebase
+client. They are not Firebase Admin credentials. The application validates the
+expected project and Android app identity before initialization and shows a safe
+configuration screen if they do not match.
+
+Never commit a service-account key, private key, App Check debug token, release
+keystore, `key.properties`, password, or signing secret. Firebase client API
+keys are identifiers rather than backend authorization; Firestore Rules enforce
+data access. Review appropriate API/application restrictions before resolving
+repository secret-scanning alerts.
+
+## Security model
+
+- Marketplace writes require an authenticated, verified, active account.
+- Customer/provider roles are immutable after registration.
+- Provider visibility and service writes require administrator approval.
+- Booking transitions validate actor, state, event writes, and slot locks.
+- Full address and contact data remain private until booking acceptance.
+- Reviews require a completed booking and use the booking ID for uniqueness.
+- Admin access depends on an active `admins/{uid}` document, never an email or
+  editable user role.
+- Category deletion is admin-only, inactive-only, and protected by a service
+  reference check.
+
+## CI, versioning, and GitHub Releases
+
+Pull requests and pushes to `main` run formatting, analysis, Flutter tests,
+Firestore tooling tests, Rules emulator tests, and a debug APK build. Successful
+CI runs retain a downloadable debug APK for 14 days.
+
+Versions use Flutter's `MAJOR.MINOR.PATCH+BUILD` format. A release tag must match
+the value in `pubspec.yaml` exactly with a `v` prefix:
+
+```text
+pubspec.yaml: version: 1.0.0+1
+Git tag:      v1.0.0+1
+```
+
+An authorized tag must point to a commit contained in `main`. The release
+workflow reruns all checks, reconstructs private signing from protected GitHub
+Environment secrets, creates a signed stable APK plus a versioned APK, writes
+SHA-256 checksums, and publishes them to GitHub Releases. Signing fails closed
+if any required secret is unavailable.
+
+Follow [GitHub Android releases and versioning](docs/RELEASING.md) before
+creating a tag. User-visible history is maintained in [CHANGELOG.md](CHANGELOG.md).
+
+## Documentation
+
+- [Finalization status and evidence](docs/FINALIZATION_PLAN.md)
+- [Documentation maintenance plan](docs/DOCUMENTATION_PLAN.md)
+- [GitHub Android releases and versioning](docs/RELEASING.md)
+- [Administrator runbook](docs/ADMIN_RUNBOOK.md)
+- [Local Android development](docs/LOCAL_ANDROID_DEVELOPMENT.md)
+- [Terms of Use](docs/terms.html)
+- [Privacy Policy](docs/privacy.html)
+- [Account deletion](docs/delete-account.html)
+
+## Current limitations
+
+- Online payment gateways are not connected; completion records cash payment.
+- Notifications are in-app Activity history, not push delivery.
+- Images are built-in; user uploads and Cloud Storage are deferred.
+- App Check enforcement remains disabled while direct-release behavior is
+  evaluated. Debug tokens must never be committed.
+- Account cleanup and complex moderation remain trusted operator procedures on
+  the Spark plan.
+- Legal text and the public support mailbox require publisher review.
+
+FixMate is an Android marketplace beta. Repository documentation is technical
+guidance and not legal advice.

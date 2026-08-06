@@ -15,23 +15,9 @@ void main() {
       DefaultFirebaseOptions.android.appId,
       FirebaseConfiguration.expectedAndroidAppId,
     );
-  });
-
-  test('uses the verified FixMate web Firebase project', () {
     expect(
-      FirebaseConfiguration.hasExpectedIdentity(
-        DefaultFirebaseOptions.web,
-        isWebPlatform: true,
-      ),
+      FirebaseConfiguration.hasExpectedIdentity(DefaultFirebaseOptions.android),
       isTrue,
-    );
-    expect(
-      DefaultFirebaseOptions.web.projectId,
-      FirebaseConfiguration.expectedProjectId,
-    );
-    expect(
-      DefaultFirebaseOptions.web.appId,
-      FirebaseConfiguration.expectedWebAppId,
     );
   });
 

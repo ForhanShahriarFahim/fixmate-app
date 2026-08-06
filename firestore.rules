@@ -7,6 +7,11 @@ service cloud.firestore {
       return get(/databases/$(database)/documents/users/$(uid));
     }
     function ownUser() { return userDoc(request.auth.uid); }
+    function isAdmin() {
+      return signedIn() && request.auth.token.email_verified == true &&
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid)) &&
+        get(/databases/$(database)/documents/admins/$(request.auth.uid)).data.active == true;
+    }
     function activeUser() {
       return signedIn() &&
         request.auth.token.email_verified == true &&
@@ -75,9 +80,38 @@ service cloud.firestore {
         data.serviceAreaKeys.size() == data.serviceAreaLabels.size() &&
         data.approvalStatus in ['pending', 'approved', 'rejected'] &&
         data.marketplaceVisible is bool &&
+        data.rejectionReason is string && data.rejectionReason.size() <= 500 &&
+        (data.reviewedBy == null || data.reviewedBy is string) &&
+        (data.reviewedAt == null || data.reviewedAt is timestamp) &&
         (!data.keys().hasAny(['ratingAverage', 'reviewCount', 'completedBookings']) ||
           (data.keys().hasAll(['ratingAverage', 'reviewCount', 'completedBookings']) &&
            data.ratingAverage == 0 && data.reviewCount == 0 && data.completedBookings == 0));
+    }
+    function eligibleProviderApplicant(uid) {
+      return userDoc(uid).data.role == 'provider' &&
+        userDoc(uid).data.status == 'active' &&
+        userDoc(uid).data.isAdultConfirmed == true &&
+        userDoc(uid).data.termsVersion == '1.0';
+    }
+    function validAdminProviderReview(uid) {
+      return isAdmin() && uid != request.auth.uid &&
+        resource.data.approvalStatus == 'pending' &&
+        validProviderProfile(request.resource.data, uid) &&
+        request.resource.data.providerId == resource.data.providerId &&
+        request.resource.data.reviewedAt == request.time &&
+        request.resource.data.reviewedBy == request.auth.uid &&
+        request.resource.data.updatedAt == request.time &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'approvalStatus', 'marketplaceVisible', 'reviewedAt', 'reviewedBy',
+          'rejectionReason', 'updatedAt'
+        ]) &&
+        ((request.resource.data.approvalStatus == 'approved' &&
+          request.resource.data.marketplaceVisible == true &&
+          request.resource.data.rejectionReason == '' &&
+          eligibleProviderApplicant(uid)) ||
+         (request.resource.data.approvalStatus == 'rejected' &&
+          request.resource.data.marketplaceVisible == false &&
+          request.resource.data.rejectionReason.size() >= 3));
     }
     function validService(data) {
       return data.providerId is string && data.providerName is string &&
@@ -247,7 +281,8 @@ service cloud.firestore {
         ]) && validActiveAccount(request.resource.data) && request.resource.data.photoPath == null &&
         request.resource.data.termsAcceptedAt == request.time &&
         request.resource.data.createdAt == request.time && request.resource.data.updatedAt == request.time;
-      allow read: if isSelf(uid);
+      allow get: if isSelf(uid) || isAdmin();
+      allow list: if false;
       allow update: if isSelf(uid) && (
         (resource.data.status == 'active' && request.resource.data.status == 'active' &&
           validActiveAccount(request.resource.data) &&
@@ -267,45 +302,80 @@ service cloud.firestore {
       );
       allow delete: if false;
     }
+    function validCategory(data) {
+      return data.name is string && data.name.size() >= 2 && data.name.size() <= 60 &&
+        data.iconKey in ['electrical', 'plumbing', 'cleaning', 'ac', 'appliance', 'painting', 'handyman'] &&
+        data.order is int && data.order >= 0 && data.order <= 999 &&
+        data.isActive is bool;
+    }
+
+    match /admins/{uid} {
+      // Membership is bootstrapped only through a trusted Firebase operator.
+      // A signed-in user may check only their own membership document.
+      allow get: if isSelf(uid);
+      allow list, create, update, delete: if false;
+    }
 
     match /provider_profiles/{uid} {
-      // Profiles contain only deliberately public marketplace fields. Signed-in
-      // users may get a profile by uid so eligibility listeners survive a
-      // provider's re-review cycle; listing still requires an approved visible
-      // profile.
-      allow get: if signedIn();
-      allow list: if resource.data.approvalStatus == 'approved' &&
-        resource.data.marketplaceVisible == true;
+      allow get: if isSelf(uid) || isAdmin() ||
+        (resource.data.approvalStatus == 'approved' &&
+         resource.data.marketplaceVisible == true);
+      allow list: if isAdmin() ||
+        (resource.data.approvalStatus == 'approved' &&
+         resource.data.marketplaceVisible == true);
       allow create: if isSelf(uid) && activeUser() && ownUser().data.role == 'provider' &&
         request.resource.data.keys().hasOnly([
           'providerId', 'publicName', 'avatarUrl', 'bio', 'experienceYears',
           'divisionCode', 'districtCode', 'serviceAreaLabels', 'serviceAreaKeys',
           'approvalStatus', 'marketplaceVisible', 'ratingAverage', 'reviewCount', 'completedBookings',
-          'createdAt', 'updatedAt'
+          'reviewedAt', 'reviewedBy', 'rejectionReason', 'createdAt', 'updatedAt'
         ]) && validProviderProfile(request.resource.data, uid) &&
         request.resource.data.approvalStatus == 'pending' && request.resource.data.marketplaceVisible == false &&
+        request.resource.data.reviewedAt == null && request.resource.data.reviewedBy == null &&
+        request.resource.data.rejectionReason == '' &&
         request.resource.data.createdAt == request.time && request.resource.data.updatedAt == request.time;
-      allow update: if isSelf(uid) && activeUser() && validProviderProfile(request.resource.data, uid) &&
-        request.resource.data.providerId == resource.data.providerId &&
-        request.resource.data.approvalStatus == 'pending' &&
-        request.resource.data.marketplaceVisible == false &&
-        request.resource.data.updatedAt == request.time &&
-        request.resource.data.diff(resource.data).affectedKeys().hasOnly([
-          'publicName', 'bio', 'experienceYears', 'divisionCode', 'districtCode',
-          'serviceAreaLabels', 'serviceAreaKeys', 'approvalStatus',
-          'marketplaceVisible', 'updatedAt'
-        ]);
+      allow update: if
+        (isSelf(uid) && activeUser() && validProviderProfile(request.resource.data, uid) &&
+          request.resource.data.providerId == resource.data.providerId &&
+          request.resource.data.approvalStatus == 'pending' &&
+          request.resource.data.marketplaceVisible == false &&
+          request.resource.data.reviewedAt == null && request.resource.data.reviewedBy == null &&
+          request.resource.data.rejectionReason == '' &&
+          request.resource.data.updatedAt == request.time &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'publicName', 'bio', 'experienceYears', 'divisionCode', 'districtCode',
+            'serviceAreaLabels', 'serviceAreaKeys', 'approvalStatus',
+            'marketplaceVisible', 'reviewedAt', 'reviewedBy', 'rejectionReason',
+            'updatedAt'
+          ])) || validAdminProviderReview(uid);
       allow delete: if false;
     }
 
     match /categories/{categoryId} {
-      allow read: if resource.data.isActive == true;
-      allow write: if false;
+      allow get: if resource.data.isActive == true || isAdmin();
+      allow list: if isAdmin() || resource.data.isActive == true;
+      allow create: if isAdmin() &&
+        categoryId.matches('^[a-z][a-z0-9-]{1,49}$') &&
+        request.resource.data.keys().hasOnly([
+          'name', 'iconKey', 'order', 'isActive', 'createdAt', 'updatedAt'
+        ]) && validCategory(request.resource.data) &&
+        request.resource.data.createdAt == request.time &&
+        request.resource.data.updatedAt == request.time;
+      allow update: if isAdmin() &&
+        categoryId.matches('^[a-z][a-z0-9-]{1,49}$') &&
+        validCategory(request.resource.data) &&
+        request.resource.data.updatedAt == request.time &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'name', 'iconKey', 'order', 'isActive', 'updatedAt'
+        ]);
+      // Categories may be removed only after deactivation. The trusted admin
+      // client also refuses deletion while any service still references the ID.
+      allow delete: if isAdmin() && resource.data.isActive == false;
     }
 
     match /services/{serviceId} {
       allow read: if resource.data.status == 'active' ||
-        (signedIn() && resource.data.providerId == request.auth.uid);
+        (signedIn() && resource.data.providerId == request.auth.uid) || isAdmin();
       allow create: if approvedProvider() &&
         request.resource.data.keys().hasOnly([
           'providerId', 'providerName', 'categoryId', 'title', 'description',
@@ -489,6 +559,25 @@ service cloud.firestore {
         request.resource.data.status == 'open' && request.resource.data.moderationNotes == '' &&
         request.resource.data.createdAt == request.time && request.resource.data.updatedAt == request.time;
       allow update, delete: if false;
+    }
+
+    match /activity_states/{uid} {
+      allow get: if isSelf(uid);
+      allow list: if false;
+      allow create: if isSelf(uid) && activeUser() &&
+        request.resource.data.keys().hasOnly(['uid', 'lastReadAt', 'updatedAt']) &&
+        request.resource.data.uid == uid &&
+        request.resource.data.lastReadAt == request.time &&
+        request.resource.data.updatedAt == request.time;
+      allow update: if isSelf(uid) && activeUser() &&
+        request.resource.data.uid == resource.data.uid &&
+        request.resource.data.uid == uid &&
+        request.resource.data.lastReadAt == request.time &&
+        request.resource.data.updatedAt == request.time &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'lastReadAt', 'updatedAt'
+        ]);
+      allow delete: if false;
     }
 
     match /deletion_requests/{uid} {
