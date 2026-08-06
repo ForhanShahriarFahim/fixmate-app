@@ -11,52 +11,78 @@ import 'package:fixmate/core/firebase/firebase_configuration.dart';
 import 'package:fixmate/core/firebase/firebase_options.dart';
 
 Future<void> main() async {
-  WidgetsFlutterBinding.ensureInitialized();
+  var firebaseInitialized = false;
 
-  if (!FirebaseConfiguration.isConfigured) {
-    runApp(const ProviderScope(child: FixMateApp(firebaseConfigured: false)));
-    return;
-  }
+  await runZonedGuarded<Future<void>>(
+    () async {
+      WidgetsFlutterBinding.ensureInitialized();
 
-  try {
-    await Firebase.initializeApp(
-      options: DefaultFirebaseOptions.currentPlatform,
-    );
-    if (!kIsWeb) {
-      await FirebaseAppCheck.instance.activate(
-        providerAndroid: kDebugMode
-            ? const AndroidDebugProvider()
-            : const AndroidPlayIntegrityProvider(),
-      );
-      FlutterError.onError =
-          FirebaseCrashlytics.instance.recordFlutterFatalError;
-      PlatformDispatcher.instance.onError = (Object error, StackTrace stack) {
-        FirebaseCrashlytics.instance.recordError(error, stack, fatal: true);
-        return true;
-      };
-    }
-  } catch (error, stack) {
-    debugPrint('FixMate Firebase initialization failed: $error');
-    debugPrintStack(stackTrace: stack);
-    runApp(
-      const ProviderScope(
-        child: FixMateApp(
-          firebaseConfigured: false,
-          firebaseSetupMessage:
-              'FixMate could not safely connect to Firebase. Check the registered Android or web app, generated Firebase options, network connection, and platform setup, then rebuild the app.',
-        ),
-      ),
-    );
-    return;
-  }
+      if (!FirebaseConfiguration.isConfigured) {
+        runApp(
+          const ProviderScope(child: FixMateApp(firebaseConfigured: false)),
+        );
+        return;
+      }
 
-  runZonedGuarded(
-    () => runApp(
-      const ProviderScope(child: FixMateApp(firebaseConfigured: true)),
-    ),
+      try {
+        await Firebase.initializeApp(
+          options: DefaultFirebaseOptions.currentPlatform,
+        );
+        firebaseInitialized = true;
+
+        if (!kIsWeb) {
+          if (FirebaseConfiguration.appCheckEnabled) {
+            await FirebaseAppCheck.instance.activate(
+              providerAndroid: kDebugMode
+                  ? const AndroidDebugProvider()
+                  : const AndroidPlayIntegrityProvider(),
+            );
+          }
+          FlutterError.onError = (FlutterErrorDetails details) {
+            if (kDebugMode) FlutterError.presentError(details);
+            FirebaseCrashlytics.instance.recordFlutterFatalError(details);
+          };
+          PlatformDispatcher
+              .instance
+              .onError = (Object error, StackTrace stack) {
+            if (kDebugMode) {
+              debugPrint(
+                'Uncaught FixMate platform error: ${error.runtimeType}',
+              );
+              debugPrintStack(stackTrace: stack);
+            }
+            FirebaseCrashlytics.instance.recordError(error, stack, fatal: true);
+            return true;
+          };
+        }
+      } catch (error, stack) {
+        debugPrint(
+          'FixMate Firebase initialization failed: ${error.runtimeType}',
+        );
+        debugPrintStack(stackTrace: stack);
+        runApp(
+          const ProviderScope(
+            child: FixMateApp(
+              firebaseConfigured: false,
+              firebaseSetupMessage:
+                  'FixMate could not safely connect to Firebase. Check the registered Android or web app, generated Firebase options, network connection, and platform setup, then rebuild the app.',
+            ),
+          ),
+        );
+        return;
+      }
+
+      runApp(const ProviderScope(child: FixMateApp(firebaseConfigured: true)));
+    },
     (Object error, StackTrace stack) {
-      if (!kIsWeb) {
-        FirebaseCrashlytics.instance.recordError(error, stack, fatal: true);
+      if (kDebugMode) {
+        debugPrint('Uncaught FixMate zone error: ${error.runtimeType}');
+        debugPrintStack(stackTrace: stack);
+      }
+      if (firebaseInitialized && !kIsWeb) {
+        unawaited(
+          FirebaseCrashlytics.instance.recordError(error, stack, fatal: true),
+        );
       }
     },
   );

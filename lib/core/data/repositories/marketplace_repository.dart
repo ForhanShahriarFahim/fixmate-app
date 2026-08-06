@@ -18,16 +18,127 @@ class MarketplaceRepository {
   final FirebaseFirestore _firestore;
   final FirebaseAuth _auth;
 
-  Stream<List<ServiceCategory>> watchCategories() => _firestore
-      .collection('categories')
-      .where('isActive', isEqualTo: true)
-      .orderBy('order')
-      .snapshots()
-      .map(
+  Stream<List<ServiceCategory>> watchCategories() =>
+      _watchQueryWithServerStart(
+        _firestore
+            .collection('categories')
+            .where('isActive', isEqualTo: true)
+            .orderBy('order'),
+      ).map(
         (snapshot) => snapshot.docs
             .map(ServiceCategory.fromDocument)
             .toList(growable: false),
       );
+
+  Stream<List<ServiceCategory>> watchAllCategories() =>
+      _watchQueryWithServerStart(
+        _firestore.collection('categories').orderBy('order'),
+      ).map(
+        (snapshot) => snapshot.docs
+            .map(ServiceCategory.fromDocument)
+            .toList(growable: false),
+      );
+
+  Future<void> saveCategory({
+    required String categoryId,
+    required bool createNew,
+    required String name,
+    required String iconKey,
+    required int order,
+    required bool isActive,
+  }) async {
+    final user = _requireAuthUser();
+    final membership = await _firestore
+        .collection('admins')
+        .doc(user.uid)
+        .get();
+    if (!membership.exists || membership.data()?['active'] != true) {
+      throw StateError('Administrator access is required.');
+    }
+    final normalizedName = name.trim().replaceAll(RegExp(r'\s+'), ' ');
+    if (normalizedName.length < 2 || normalizedName.length > 60) {
+      throw ArgumentError('Use a category name between 2 and 60 characters.');
+    }
+    if (!RegExp(r'^[a-z][a-z0-9-]{1,49}$').hasMatch(categoryId)) {
+      throw ArgumentError(
+        'Use a lowercase category ID such as water-filter-repair.',
+      );
+    }
+    const allowedIcons = <String>{
+      'electrical',
+      'plumbing',
+      'cleaning',
+      'ac',
+      'appliance',
+      'painting',
+      'handyman',
+    };
+    if (!allowedIcons.contains(iconKey)) {
+      throw ArgumentError('Choose a supported category icon.');
+    }
+    if (order < 0 || order > 999) {
+      throw ArgumentError('Category order must be between 0 and 999.');
+    }
+    final reference = _firestore.collection('categories').doc(categoryId);
+    final existing = await reference.get();
+    if (createNew && existing.exists) {
+      throw StateError('That category ID is already in use.');
+    }
+    if (!createNew && !existing.exists) {
+      throw StateError('This category no longer exists.');
+    }
+    final payload = <String, dynamic>{
+      'name': normalizedName,
+      'iconKey': iconKey,
+      'order': order,
+      'isActive': isActive,
+      'updatedAt': FieldValue.serverTimestamp(),
+    };
+    if (createNew) {
+      payload['createdAt'] = FieldValue.serverTimestamp();
+    }
+    await reference.set(payload, SetOptions(merge: !createNew));
+  }
+
+  Future<void> deleteCategory(String categoryId) async {
+    final user = _requireAuthUser();
+    final membership = await _firestore
+        .collection('admins')
+        .doc(user.uid)
+        .get(const GetOptions(source: Source.server))
+        .timeout(const Duration(seconds: 15));
+    if (!membership.exists || membership.data()?['active'] != true) {
+      throw StateError('Administrator access is required.');
+    }
+    if (!RegExp(r'^[a-z][a-z0-9-]{1,49}$').hasMatch(categoryId)) {
+      throw ArgumentError('The category ID is invalid.');
+    }
+
+    final reference = _firestore.collection('categories').doc(categoryId);
+    final category = await reference
+        .get(const GetOptions(source: Source.server))
+        .timeout(const Duration(seconds: 15));
+    if (!category.exists) {
+      throw StateError('This category has already been deleted.');
+    }
+    if (category.data()?['isActive'] == true) {
+      throw StateError('Deactivate this category before deleting it.');
+    }
+
+    final referencedServices = await _firestore
+        .collection('services')
+        .where('categoryId', isEqualTo: categoryId)
+        .limit(1)
+        .get(const GetOptions(source: Source.server))
+        .timeout(const Duration(seconds: 15));
+    if (referencedServices.docs.isNotEmpty) {
+      throw StateError(
+        'This category is still used by a service. Reassign every service to another active category before deleting it.',
+      );
+    }
+
+    await reference.delete().timeout(const Duration(seconds: 15));
+  }
 
   Stream<List<ServiceListing>> watchServices({
     String? categoryId,
@@ -154,7 +265,74 @@ class MarketplaceRepository {
             .toList(growable: false),
       );
 
-  Future<void> saveProviderProfile({
+  Stream<List<ProviderProfile>> watchProviderApplications({
+    ProviderApprovalStatus status = ProviderApprovalStatus.pending,
+    int limit = 50,
+  }) => _firestore
+      .collection('provider_profiles')
+      .where('approvalStatus', isEqualTo: status.name)
+      .limit(limit.clamp(1, 100))
+      .snapshots()
+      .map((snapshot) {
+        final profiles = snapshot.docs
+            .map(ProviderProfile.fromDocument)
+            .toList(growable: true);
+        profiles.sort(
+          (left, right) =>
+              (right.updatedAt ?? DateTime.fromMillisecondsSinceEpoch(0))
+                  .compareTo(
+                    left.updatedAt ?? DateTime.fromMillisecondsSinceEpoch(0),
+                  ),
+        );
+        return List<ProviderProfile>.unmodifiable(profiles);
+      });
+
+  Future<void> reviewProviderApplication({
+    required String providerId,
+    required ProviderApprovalStatus decision,
+    String rejectionReason = '',
+  }) async {
+    final reviewer = _requireAuthUser();
+    if (decision != ProviderApprovalStatus.approved &&
+        decision != ProviderApprovalStatus.rejected) {
+      throw ArgumentError('Choose approve or reject.');
+    }
+    final reason = rejectionReason.trim();
+    if (decision == ProviderApprovalStatus.rejected && reason.length < 3) {
+      throw ArgumentError('Enter a rejection reason of at least 3 characters.');
+    }
+    if (reason.length > 500) {
+      throw ArgumentError(
+        'The rejection reason must be 500 characters or less.',
+      );
+    }
+
+    final reference = _firestore
+        .collection('provider_profiles')
+        .doc(providerId);
+    await _firestore.runTransaction((transaction) async {
+      final snapshot = await transaction.get(reference);
+      if (!snapshot.exists) {
+        throw StateError('This provider application no longer exists.');
+      }
+      final profile = ProviderProfile.fromDocument(snapshot);
+      if (profile.approvalStatus != ProviderApprovalStatus.pending) {
+        throw StateError('This provider application was already reviewed.');
+      }
+      transaction.update(reference, <String, dynamic>{
+        'approvalStatus': decision.name,
+        'marketplaceVisible': decision == ProviderApprovalStatus.approved,
+        'reviewedAt': FieldValue.serverTimestamp(),
+        'reviewedBy': reviewer.uid,
+        'rejectionReason': decision == ProviderApprovalStatus.rejected
+            ? reason
+            : '',
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+    });
+  }
+
+  Future<ProviderProfile> saveProviderProfile({
     required String providerId,
     required String publicName,
     required String bio,
@@ -166,7 +344,9 @@ class MarketplaceRepository {
     final reference = _firestore
         .collection('provider_profiles')
         .doc(providerId);
-    final existing = await reference.get();
+    final existing = await reference.get(
+      const GetOptions(source: Source.server),
+    );
     final labels = _normalizedLabels(serviceAreas);
     if (labels.isEmpty || labels.length > 10) {
       throw ArgumentError('Enter between 1 and 10 unique service areas.');
@@ -187,6 +367,9 @@ class MarketplaceRepository {
       // provider can never make this profile publicly bookable.
       'approvalStatus': ProviderApprovalStatus.pending.name,
       'marketplaceVisible': false,
+      'reviewedAt': null,
+      'reviewedBy': null,
+      'rejectionReason': '',
       'updatedAt': FieldValue.serverTimestamp(),
     };
     if (!existing.exists) {
@@ -195,6 +378,23 @@ class MarketplaceRepository {
       });
     }
     await reference.set(payload, SetOptions(merge: true));
+    final confirmed = await reference.get(
+      const GetOptions(source: Source.server),
+    );
+    if (!confirmed.exists) {
+      throw StateError(
+        'Firebase did not confirm the provider application. Try again.',
+      );
+    }
+    final profile = ProviderProfile.fromDocument(confirmed);
+    if (profile.providerId != providerId ||
+        profile.approvalStatus != ProviderApprovalStatus.pending ||
+        profile.marketplaceVisible) {
+      throw StateError(
+        'Firebase returned an unexpected provider application state. Contact FixMate support.',
+      );
+    }
+    return profile;
   }
 
   Future<String> saveService({
@@ -208,6 +408,16 @@ class MarketplaceRepository {
     required List<String> areaLabels,
     required ServiceStatus status,
   }) async {
+    final categorySnapshot = await _firestore
+        .collection('categories')
+        .doc(categoryId)
+        .get();
+    if (!categorySnapshot.exists ||
+        categorySnapshot.data()?['isActive'] != true) {
+      throw StateError(
+        'Choose an active service category. Ask an administrator if the category you need is missing.',
+      );
+    }
     final profileSnapshot = await _firestore
         .collection('provider_profiles')
         .doc(providerId)
@@ -327,62 +537,57 @@ class MarketplaceRepository {
   Stream<List<ServiceReview>> watchProviderReviews(
     String providerId, {
     int limit = 20,
-  }) => _firestore
-      .collection('reviews')
-      .where('providerId', isEqualTo: providerId)
-      .orderBy('createdAt', descending: true)
-      .limit(limit.clamp(1, 100))
-      .snapshots()
-      .map(
+  }) =>
+      _watchQueryWithServerStart(
+        _firestore
+            .collection('reviews')
+            .where('providerId', isEqualTo: providerId)
+            .orderBy('createdAt', descending: true)
+            .limit(limit.clamp(1, 100)),
+      ).map(
         (snapshot) => snapshot.docs
             .map(ServiceReview.fromDocument)
             .toList(growable: false),
       );
 
+  Stream<ServiceReview?> watchBookingReview(String bookingId) =>
+      _watchDocumentWithServerStart(
+        _firestore.collection('reviews').doc(bookingId),
+      ).map(
+        (snapshot) =>
+            snapshot.exists ? ServiceReview.fromDocument(snapshot) : null,
+      );
+
   Future<ReviewSummary> getProviderReviewSummary(String providerId) async {
-    final snapshot = await _firestore
-        .collection('reviews')
-        .where('providerId', isEqualTo: providerId)
-        .aggregate(count(), average('rating'))
-        .get();
-    final reviewCount = snapshot.count ?? 0;
-    return ReviewSummary(
-      count: reviewCount,
-      average: reviewCount == 0 ? null : snapshot.getAverage('rating'),
+    final documents = await _getAllPages(
+      _firestore
+          .collection('reviews')
+          .where('providerId', isEqualTo: providerId)
+          .orderBy('createdAt', descending: true),
     );
+    return calculateReviewSummary(documents.map(ServiceReview.fromDocument));
   }
 
   Future<ProviderDashboardStats> getProviderDashboardStats(
     String providerId,
   ) async {
-    final bookings = _firestore
-        .collection('bookings')
-        .where('providerId', isEqualTo: providerId);
     final results = await Future.wait([
-      bookings
-          .where('status', isEqualTo: BookingStatus.pending.name)
-          .count()
-          .get(),
-      bookings
-          .where(
-            'status',
-            whereIn: <String>[
-              BookingStatus.accepted.name,
-              BookingStatus.inProgress.name,
-              BookingStatus.completionRequested.name,
-            ],
-          )
-          .count()
-          .get(),
-      bookings
-          .where('status', isEqualTo: BookingStatus.completed.name)
-          .count()
-          .get(),
+      _getAllPages(
+        _firestore
+            .collection('bookings')
+            .where('providerId', isEqualTo: providerId)
+            .orderBy('createdAt', descending: true),
+      ),
+      _getAllPages(
+        _firestore
+            .collection('services')
+            .where('providerId', isEqualTo: providerId)
+            .orderBy('updatedAt', descending: true),
+      ),
     ]);
-    return ProviderDashboardStats(
-      pending: results[0].count ?? 0,
-      active: results[1].count ?? 0,
-      completed: results[2].count ?? 0,
+    return calculateProviderDashboardStats(
+      bookings: results[0].map(Booking.fromDocument),
+      services: results[1].map(ServiceListing.fromDocument),
     );
   }
 
@@ -443,6 +648,126 @@ class MarketplaceRepository {
     );
     return activity;
   });
+
+  Stream<ActivityFeed> watchActivityFeed({
+    required String uid,
+    required UserRole role,
+  }) {
+    late final StreamController<ActivityFeed> controller;
+    StreamSubscription<List<FixMateNotification>>? activitySubscription;
+    StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>?
+    stateSubscription;
+    var items = const <FixMateNotification>[];
+    DateTime? lastReadAt;
+    var activityReady = false;
+    var stateReady = false;
+    var readTrackingAvailable = true;
+
+    void emit() {
+      if (!controller.isClosed && activityReady && stateReady) {
+        controller.add(
+          ActivityFeed(
+            items: items,
+            lastReadAt: lastReadAt,
+            readTrackingAvailable: readTrackingAvailable,
+          ),
+        );
+      }
+    }
+
+    controller = StreamController<ActivityFeed>(
+      onListen: () {
+        activitySubscription = watchActivity(uid: uid, role: role).listen((
+          value,
+        ) {
+          items = value;
+          activityReady = true;
+          emit();
+        }, onError: controller.addError);
+        stateSubscription = _firestore
+            .collection('activity_states')
+            .doc(uid)
+            .snapshots()
+            .listen(
+              (snapshot) {
+                readTrackingAvailable = true;
+                lastReadAt = snapshot.exists
+                    ? dateFrom(snapshot.data()?['lastReadAt'])
+                    : null;
+                stateReady = true;
+                emit();
+              },
+              onError: (Object error, StackTrace stack) {
+                if (error is FirebaseException &&
+                    error.code == 'permission-denied') {
+                  readTrackingAvailable = false;
+                  lastReadAt = null;
+                  stateReady = true;
+                  emit();
+                  return;
+                }
+                controller.addError(error, stack);
+              },
+            );
+      },
+      onCancel: () async {
+        await activitySubscription?.cancel();
+        await stateSubscription?.cancel();
+      },
+    );
+    return controller.stream;
+  }
+
+  Stream<QuerySnapshot<Map<String, dynamic>>> _watchQueryWithServerStart(
+    Query<Map<String, dynamic>> query,
+  ) async* {
+    final initial = await query
+        .get(const GetOptions(source: Source.server))
+        .timeout(const Duration(seconds: 15));
+    yield initial;
+    yield* query.snapshots();
+  }
+
+  Stream<DocumentSnapshot<Map<String, dynamic>>> _watchDocumentWithServerStart(
+    DocumentReference<Map<String, dynamic>> document,
+  ) async* {
+    final initial = await document
+        .get(const GetOptions(source: Source.server))
+        .timeout(const Duration(seconds: 15));
+    yield initial;
+    yield* document.snapshots();
+  }
+
+  Future<List<QueryDocumentSnapshot<Map<String, dynamic>>>> _getAllPages(
+    Query<Map<String, dynamic>> query, {
+    int pageSize = 100,
+  }) async {
+    final documents = <QueryDocumentSnapshot<Map<String, dynamic>>>[];
+    final deadline = DateTime.now().add(const Duration(seconds: 20));
+    Query<Map<String, dynamic>> page = query.limit(pageSize);
+    while (true) {
+      final remaining = deadline.difference(DateTime.now());
+      if (remaining <= Duration.zero) {
+        throw TimeoutException('Firebase data loading timed out.');
+      }
+      final snapshot = await page
+          .get(const GetOptions(source: Source.server))
+          .timeout(remaining);
+      documents.addAll(snapshot.docs);
+      if (snapshot.docs.length < pageSize) return documents;
+      page = query.startAfterDocument(snapshot.docs.last).limit(pageSize);
+    }
+  }
+
+  Future<void> markAllActivityRead(String uid) async {
+    final user = _requireAuthUser();
+    if (user.uid != uid) throw StateError('You can update only your activity.');
+    await _firestore.collection('activity_states').doc(uid).set({
+      'uid': uid,
+      'lastReadAt': FieldValue.serverTimestamp(),
+      'updatedAt': FieldValue.serverTimestamp(),
+    });
+  }
 
   String _bookingActivityTitle(BookingStatus status) => switch (status) {
     BookingStatus.pending => 'Booking requested',
@@ -1259,4 +1584,61 @@ class MarketplaceRepository {
     }
     return true;
   }
+}
+
+ReviewSummary calculateReviewSummary(Iterable<ServiceReview> reviews) {
+  var count = 0;
+  var ratingTotal = 0;
+  for (final review in reviews) {
+    if (review.rating < 1 || review.rating > 5) continue;
+    count++;
+    ratingTotal += review.rating;
+  }
+  return ReviewSummary(
+    count: count,
+    average: count == 0 ? null : ratingTotal / count,
+  );
+}
+
+ProviderDashboardStats calculateProviderDashboardStats({
+  required Iterable<Booking> bookings,
+  required Iterable<ServiceListing> services,
+}) {
+  var pending = 0;
+  var active = 0;
+  var completed = 0;
+  var cashEarningsBdt = 0;
+  for (final booking in bookings) {
+    switch (booking.status) {
+      case BookingStatus.pending:
+        pending++;
+      case BookingStatus.accepted:
+      case BookingStatus.inProgress:
+      case BookingStatus.completionRequested:
+        active++;
+      case BookingStatus.completed:
+        completed++;
+        if (booking.paymentStatus == PaymentStatus.paidCash) {
+          cashEarningsBdt += booking.priceBdt;
+        }
+      case BookingStatus.rejected:
+      case BookingStatus.cancelled:
+      case BookingStatus.disputed:
+        break;
+    }
+  }
+  var totalServices = 0;
+  var activeServices = 0;
+  for (final service in services) {
+    totalServices++;
+    if (service.status == ServiceStatus.active) activeServices++;
+  }
+  return ProviderDashboardStats(
+    pending: pending,
+    active: active,
+    completed: completed,
+    totalServices: totalServices,
+    activeServices: activeServices,
+    cashEarningsBdt: cashEarningsBdt,
+  );
 }

@@ -8,13 +8,18 @@ import {
   initializeTestEnvironment,
 } from "@firebase/rules-unit-testing";
 import {
+  collection,
   deleteDoc,
   doc,
   getDoc,
+  getDocs,
+  orderBy,
+  query,
   serverTimestamp,
   setDoc,
   Timestamp,
   updateDoc,
+  where,
   writeBatch,
 } from "firebase/firestore";
 
@@ -54,6 +59,28 @@ function bookingData(status: string, overrides: Record<string, unknown> = {}) {
     lastMessagePreview: null,
     createdAt,
     updatedAt: createdAt,
+    ...overrides,
+  };
+}
+
+function providerApplicationData(overrides: Record<string, unknown> = {}) {
+  return {
+    providerId: "applicant",
+    publicName: "Applicant User",
+    avatarUrl: null,
+    bio: "A qualified provider applying to join the FixMate marketplace.",
+    experienceYears: 3,
+    divisionCode: "dhaka",
+    districtCode: "dhaka",
+    serviceAreaLabels: ["Dhanmondi"],
+    serviceAreaKeys: ["dhanmondi"],
+    approvalStatus: "pending",
+    marketplaceVisible: false,
+    reviewedAt: null,
+    reviewedBy: null,
+    rejectionReason: "",
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
     ...overrides,
   };
 }
@@ -102,12 +129,28 @@ before(async () => {
       photoPath: null, termsVersion: "1.0", isAdultConfirmed: true,
       createdAt, updatedAt: createdAt, termsAcceptedAt: createdAt,
     });
+    await setDoc(doc(firestore, "users/pending-review"), {
+      role: "provider", status: "active", displayName: "Pending Review",
+      email: "pending@example.com", phoneE164: "+8801700000008",
+      photoPath: null, termsVersion: "1.0", isAdultConfirmed: true,
+      createdAt, updatedAt: createdAt, termsAcceptedAt: createdAt,
+    });
+    await setDoc(doc(firestore, "users/pending-reject"), {
+      role: "provider", status: "active", displayName: "Pending Reject",
+      email: "reject@example.com", phoneE164: "+8801700000009",
+      photoPath: null, termsVersion: "1.0", isAdultConfirmed: true,
+      createdAt, updatedAt: createdAt, termsAcceptedAt: createdAt,
+    });
+    await setDoc(doc(firestore, "admins/admin"), {
+      active: true, displayName: "FixMate Administrator", createdAt,
+    });
     await setDoc(doc(firestore, "provider_profiles/provider"), {
       providerId: "provider", publicName: "Provider User", avatarUrl: null,
       bio: "Experienced and careful electrical service provider.",
       experienceYears: 5, divisionCode: "dhaka", districtCode: "dhaka",
       serviceAreaLabels: ["Dhanmondi"], serviceAreaKeys: ["dhanmondi"],
       approvalStatus: "approved", marketplaceVisible: true,
+      reviewedAt: createdAt, reviewedBy: "seed-admin", rejectionReason: "",
       ratingAverage: 0, reviewCount: 0,
       completedBookings: 0, createdAt, updatedAt: createdAt,
     });
@@ -130,7 +173,29 @@ before(async () => {
       experienceYears: 5, divisionCode: "dhaka", districtCode: "dhaka",
       serviceAreaLabels: ["Dhanmondi"], serviceAreaKeys: ["dhanmondi"],
       approvalStatus: "approved", marketplaceVisible: true,
+      reviewedAt: createdAt, reviewedBy: "seed-admin", rejectionReason: "",
       ratingAverage: 0, reviewCount: 0, completedBookings: 0,
+      createdAt, updatedAt: createdAt,
+    });
+    for (const id of ["pending-review", "pending-reject"]) {
+      await setDoc(doc(firestore, `provider_profiles/${id}`), {
+        providerId: id, publicName: id === "pending-review" ? "Pending Review" : "Pending Reject",
+        avatarUrl: null,
+        bio: "A qualified provider waiting for an administrator review decision.",
+        experienceYears: 4, divisionCode: "dhaka", districtCode: "dhaka",
+        serviceAreaLabels: ["Dhanmondi"], serviceAreaKeys: ["dhanmondi"],
+        approvalStatus: "pending", marketplaceVisible: false,
+        reviewedAt: null, reviewedBy: null, rejectionReason: "",
+        createdAt, updatedAt: createdAt,
+      });
+    }
+    await setDoc(doc(firestore, "provider_profiles/admin"), {
+      providerId: "admin", publicName: "Admin Applicant", avatarUrl: null,
+      bio: "An administrator must not be allowed to review their own application.",
+      experienceYears: 4, divisionCode: "dhaka", districtCode: "dhaka",
+      serviceAreaLabels: ["Dhanmondi"], serviceAreaKeys: ["dhanmondi"],
+      approvalStatus: "pending", marketplaceVisible: false,
+      reviewedAt: null, reviewedBy: null, rejectionReason: "",
       createdAt, updatedAt: createdAt,
     });
     await setDoc(doc(firestore, "services/suspended-service"), {
@@ -228,6 +293,13 @@ function providerDb() {
   }).firestore();
 }
 
+function adminDb() {
+  return environment.authenticatedContext("admin", {
+    email: "admin@example.com", email_verified: true,
+    auth_time: Math.floor(Date.now() / 1000),
+  }).firestore();
+}
+
 test("public reads stay public while unauthenticated private access and writes are denied", { skip: !emulatorAvailable }, async () => {
   const firestore = environment.unauthenticatedContext().firestore();
   await assertSucceeds(getDoc(doc(firestore, "services/service")));
@@ -271,22 +343,138 @@ test("unverified accounts cannot perform marketplace mutations", { skip: !emulat
   }));
 });
 
-test("provider applications start pending and cannot self-approve", { skip: !emulatorAvailable }, async () => {
+test("provider applications require verification, match the client payload, and cannot self-approve", { skip: !emulatorAvailable }, async () => {
+  const unverified = environment.authenticatedContext("applicant", {
+    email: "applicant@example.com", email_verified: false,
+  }).firestore();
+  await assertFails(setDoc(
+    doc(unverified, "provider_profiles/applicant"),
+    providerApplicationData(),
+  ));
+
   const firestore = environment.authenticatedContext("applicant", {
     email: "applicant@example.com", email_verified: true,
   }).firestore();
   const profile = doc(firestore, "provider_profiles/applicant");
-  await assertSucceeds(setDoc(profile, {
-    providerId: "applicant", publicName: "Applicant User", avatarUrl: null,
-    bio: "A qualified provider applying to join the FixMate marketplace.",
-    experienceYears: 3, divisionCode: "dhaka", districtCode: "dhaka",
-    serviceAreaLabels: ["Dhanmondi"], serviceAreaKeys: ["dhanmondi"],
-    approvalStatus: "pending", marketplaceVisible: false,
-    ratingAverage: 0, reviewCount: 0, completedBookings: 0,
-    createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
+  await assertSucceeds(setDoc(profile, providerApplicationData()));
+  const saved = await assertSucceeds(getDoc(profile));
+  assert.equal(saved.data()?.approvalStatus, "pending");
+  assert.equal(saved.data()?.marketplaceVisible, false);
+  assert.equal(saved.data()?.avatarUrl, null);
+  assert.equal(saved.data()?.ratingAverage, undefined);
+  await assertFails(updateDoc(profile, {
+    approvalStatus: "approved", marketplaceVisible: true,
+    updatedAt: serverTimestamp(),
+  }));
+});
+
+test("admin membership cannot be self-assigned or inspected by another user", { skip: !emulatorAvailable }, async () => {
+  const admin = adminDb();
+  const customer = customerDb();
+  await assertSucceeds(getDoc(doc(admin, "admins/admin")));
+  await assertFails(getDoc(doc(customer, "admins/admin")));
+  await assertFails(setDoc(doc(customer, "admins/customer"), {
+    active: true, displayName: "Fake admin", createdAt: serverTimestamp(),
+  }));
+});
+
+test("only administrators can manage provider-selectable service categories", { skip: !emulatorAvailable }, async () => {
+  const admin = adminDb();
+  const customer = customerDb();
+  const provider = providerDb();
+  const category = {
+    name: "Water Filter Repair", iconKey: "appliance", order: 7,
+    isActive: true, createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
+  };
+  await assertFails(setDoc(doc(customer, "categories/water-filter-repair"), category));
+  await assertSucceeds(setDoc(doc(admin, "categories/water-filter-repair"), category));
+  await assertSucceeds(getDocs(query(
+    collection(admin, "categories"),
+    orderBy("order"),
+  )));
+  await assertSucceeds(getDoc(doc(provider, "categories/water-filter-repair")));
+  await assertFails(deleteDoc(doc(admin, "categories/water-filter-repair")));
+  await assertSucceeds(updateDoc(doc(admin, "categories/water-filter-repair"), {
+    isActive: false, updatedAt: serverTimestamp(),
+  }));
+  await assertFails(getDoc(doc(provider, "categories/water-filter-repair")));
+  await assertSucceeds(getDoc(doc(admin, "categories/water-filter-repair")));
+  await assertFails(deleteDoc(doc(customer, "categories/water-filter-repair")));
+  await assertSucceeds(deleteDoc(doc(admin, "categories/water-filter-repair")));
+
+  await assertSucceeds(getDocs(query(
+    collection(admin, "services"),
+    where("categoryId", "==", "electrical"),
+  )));
+  await assertFails(getDocs(query(
+    collection(customer, "services"),
+    where("categoryId", "==", "electrical"),
+  )));
+});
+
+test("activity read state is private and requires a verified active account", { skip: !emulatorAvailable }, async () => {
+  const customer = customerDb();
+  const provider = providerDb();
+  const state = doc(customer, "activity_states/customer");
+  await assertSucceeds(setDoc(state, {
+    uid: "customer", lastReadAt: serverTimestamp(), updatedAt: serverTimestamp(),
+  }));
+  await assertSucceeds(getDoc(state));
+  await assertFails(getDoc(doc(provider, "activity_states/customer")));
+  const unverified = environment.authenticatedContext("stranger", {
+    email: "stranger@example.com", email_verified: false,
+  }).firestore();
+  await assertFails(setDoc(doc(unverified, "activity_states/stranger"), {
+    uid: "stranger", lastReadAt: serverTimestamp(), updatedAt: serverTimestamp(),
+  }));
+});
+
+test("only an admin can inspect hidden applications and approve an eligible provider", { skip: !emulatorAvailable }, async () => {
+  const admin = adminDb();
+  const customer = customerDb();
+  await assertFails(getDoc(doc(customer, "provider_profiles/pending-review")));
+  const pending = query(
+    collection(admin, "provider_profiles"),
+    where("approvalStatus", "==", "pending"),
+  );
+  const pendingSnapshot = await assertSucceeds(getDocs(pending));
+  assert.ok(pendingSnapshot.docs.some((item) => item.id === "pending-review"));
+
+  await assertSucceeds(updateDoc(doc(admin, "provider_profiles/pending-review"), {
+    approvalStatus: "approved", marketplaceVisible: true,
+    reviewedAt: serverTimestamp(), reviewedBy: "admin", rejectionReason: "",
+    updatedAt: serverTimestamp(),
+  }));
+  const reviewed = await assertSucceeds(
+    getDoc(doc(customer, "provider_profiles/pending-review")),
+  );
+  assert.equal(reviewed.data()?.marketplaceVisible, true);
+  await assertSucceeds(getDoc(doc(admin, "users/pending-review")));
+});
+
+test("admin rejection requires feedback and protected audit fields", { skip: !emulatorAvailable }, async () => {
+  const admin = adminDb();
+  const profile = doc(admin, "provider_profiles/pending-reject");
+  await assertFails(updateDoc(profile, {
+    approvalStatus: "rejected", marketplaceVisible: false,
+    reviewedAt: serverTimestamp(), reviewedBy: "admin", rejectionReason: "",
+    updatedAt: serverTimestamp(),
   }));
   await assertFails(updateDoc(profile, {
     approvalStatus: "approved", marketplaceVisible: true,
+    reviewedAt: serverTimestamp(), reviewedBy: "someone-else", rejectionReason: "",
+    updatedAt: serverTimestamp(),
+  }));
+  await assertSucceeds(updateDoc(profile, {
+    approvalStatus: "rejected", marketplaceVisible: false,
+    reviewedAt: serverTimestamp(), reviewedBy: "admin",
+    rejectionReason: "Please provide clearer coverage details.",
+    updatedAt: serverTimestamp(),
+  }));
+  await assertFails(updateDoc(doc(admin, "provider_profiles/admin"), {
+    approvalStatus: "rejected", marketplaceVisible: false,
+    reviewedAt: serverTimestamp(), reviewedBy: "admin",
+    rejectionReason: "Self-review is not allowed.",
     updatedAt: serverTimestamp(),
   }));
 });
@@ -640,6 +828,25 @@ test("one customer review is allowed only for a completed booking", { skip: !emu
   }));
 });
 
+test("provider dashboard and public review queries match the rules", { skip: !emulatorAvailable }, async () => {
+  const provider = providerDb();
+  await assertSucceeds(getDocs(query(
+    collection(provider, "bookings"),
+    where("providerId", "==", "provider"),
+    orderBy("createdAt", "desc"),
+  )));
+  await assertSucceeds(getDocs(query(
+    collection(provider, "services"),
+    where("providerId", "==", "provider"),
+    orderBy("updatedAt", "desc"),
+  )));
+  await assertSucceeds(getDocs(query(
+    collection(provider, "reviews"),
+    where("providerId", "==", "provider"),
+    orderBy("createdAt", "desc"),
+  )));
+});
+
 test("reports use contextual reasons, deterministic IDs, and are create-only", { skip: !emulatorAvailable }, async () => {
   const firestore = customerDb();
   const report = doc(firestore, "reports/customer_accepted_user_provider");
@@ -706,7 +913,8 @@ test("providers cannot self-approve and profile edits revoke marketplace visibil
   }));
   await assertSucceeds(updateDoc(doc(firestore, "provider_profiles/provider"), {
     publicName: "Provider User Updated", approvalStatus: "pending",
-    marketplaceVisible: false, updatedAt: serverTimestamp(),
+    marketplaceVisible: false, reviewedAt: null, reviewedBy: null,
+    rejectionReason: "", updatedAt: serverTimestamp(),
   }));
 });
 

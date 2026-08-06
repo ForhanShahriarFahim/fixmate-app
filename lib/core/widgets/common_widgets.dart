@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:intl/intl.dart';
 import 'package:fixmate/core/domain/models.dart';
 
 class LoadingView extends StatelessWidget {
@@ -99,6 +100,63 @@ class BookingStatusChip extends StatelessWidget {
     BookingStatus.completionRequested => 'Awaiting confirmation',
     _ => value.name[0].toUpperCase() + value.name.substring(1),
   };
+}
+
+class VerifiedReviewCard extends StatelessWidget {
+  const VerifiedReviewCard({required this.review, super.key});
+
+  final ServiceReview review;
+
+  @override
+  Widget build(BuildContext context) {
+    final reviewedAt = review.createdAt == null
+        ? 'Verified completed booking'
+        : 'Verified booking • ${DateFormat.yMMMd().format(review.createdAt!.toLocal())}';
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    review.customerName,
+                    style: Theme.of(context).textTheme.titleSmall,
+                  ),
+                ),
+                Semantics(
+                  container: true,
+                  excludeSemantics: true,
+                  label: '${review.rating} out of 5 stars',
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: List.generate(
+                      5,
+                      (index) => Icon(
+                        index < review.rating ? Icons.star : Icons.star_border,
+                        size: 18,
+                        color: Colors.amber.shade700,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 4),
+            Text(reviewedAt, style: Theme.of(context).textTheme.bodySmall),
+            const SizedBox(height: 10),
+            Text(
+              review.comment.trim().isEmpty
+                  ? 'No written comment.'
+                  : review.comment.trim(),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 }
 
 void showMessage(BuildContext context, String message, {bool error = false}) {

@@ -1,3 +1,5 @@
+import 'package:firebase_core/firebase_core.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -12,8 +14,15 @@ import 'package:fixmate/core/widgets/common_widgets.dart';
 import 'package:fixmate/features/catalog/catalog_screens.dart';
 
 class ProviderOnboardingScreen extends ConsumerStatefulWidget {
-  const ProviderOnboardingScreen({this.existing, super.key});
+  const ProviderOnboardingScreen({
+    this.existing,
+    this.onSubmitted,
+    this.onSubmittingChanged,
+    super.key,
+  });
   final ProviderProfile? existing;
+  final ValueChanged<ProviderProfile>? onSubmitted;
+  final ValueChanged<bool>? onSubmittingChanged;
 
   @override
   ConsumerState<ProviderOnboardingScreen> createState() =>
@@ -31,6 +40,7 @@ class _ProviderOnboardingScreenState
   String? _divisionCode;
   String? _districtCode;
   bool _loading = false;
+  ProviderProfile? _submittedProfile;
 
   @override
   void initState() {
@@ -66,6 +76,7 @@ class _ProviderOnboardingScreenState
   }
 
   Future<void> _save() async {
+    if (_loading) return;
     if (!_formKey.currentState!.validate() ||
         _divisionCode == null ||
         _districtCode == null ||
@@ -77,30 +88,57 @@ class _ProviderOnboardingScreenState
       );
       return;
     }
-    final user = ref.read(firebaseAuthProvider).currentUser!;
     setState(() => _loading = true);
+    widget.onSubmittingChanged?.call(true);
+    var submitted = false;
     try {
-      await ref
-          .read(marketplaceRepositoryProvider)
-          .saveProviderProfile(
-            providerId: user.uid,
-            publicName: _name.text,
-            bio: _bio.text,
-            experienceYears: int.parse(_experience.text),
-            divisionCode: _divisionCode!,
-            districtCode: _districtCode!,
-            serviceAreas: _areas,
-          );
-      if (mounted) context.go('/provider');
-    } catch (error) {
-      if (mounted) showMessage(context, friendlyError(error), error: true);
+      final profile = await ref.read(providerProfileSubmitterProvider)(
+        ProviderProfileDraft(
+          publicName: _name.text,
+          bio: _bio.text,
+          experienceYears: int.parse(_experience.text),
+          divisionCode: _divisionCode!,
+          districtCode: _districtCode!,
+          serviceAreas: List<String>.unmodifiable(_areas),
+        ),
+      );
+      if (!mounted) return;
+      setState(() {
+        _submittedProfile = profile;
+        _loading = false;
+      });
+      submitted = true;
+      widget.onSubmitted?.call(profile);
+      if (widget.onSubmitted == null) {
+        ref.invalidate(providerProfileProvider(profile.providerId));
+      }
+      widget.onSubmittingChanged?.call(false);
+    } catch (error, stack) {
+      if (kDebugMode) {
+        final description = error is FirebaseException
+            ? '${error.plugin}/${error.code}'
+            : error.runtimeType.toString();
+        debugPrint('Provider application failed ($description).');
+        debugPrintStack(stackTrace: stack);
+      }
+      if (mounted) {
+        showMessage(context, providerApplicationError(error), error: true);
+      }
     } finally {
       if (mounted) setState(() => _loading = false);
+      if (!submitted) widget.onSubmittingChanged?.call(false);
     }
   }
 
   @override
   Widget build(BuildContext context) {
+    final submittedProfile = _submittedProfile;
+    if (submittedProfile != null) {
+      return ProviderApprovalScreen(
+        profile: submittedProfile,
+        submissionAcknowledged: true,
+      );
+    }
     final locations = ref.watch(bangladeshLocationsProvider);
     return Scaffold(
       appBar: AppBar(
@@ -264,56 +302,151 @@ class _ProviderOnboardingScreenState
   }
 }
 
-class ProviderApprovalScreen extends StatelessWidget {
-  const ProviderApprovalScreen({required this.profile, super.key});
+class ProviderApprovalScreen extends ConsumerWidget {
+  const ProviderApprovalScreen({
+    required this.profile,
+    this.submissionAcknowledged = false,
+    super.key,
+  });
   final ProviderProfile profile;
+  final bool submissionAcknowledged;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final rejected = profile.approvalStatus == ProviderApprovalStatus.rejected;
     return Scaffold(
-      appBar: AppBar(title: const Text('Provider account')),
-      body: Center(
-        child: Padding(
-          padding: const EdgeInsets.all(28),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(
-                rejected ? Icons.cancel_outlined : Icons.hourglass_top_rounded,
-                size: 68,
-                color: rejected
-                    ? Theme.of(context).colorScheme.error
-                    : Theme.of(context).colorScheme.primary,
+      appBar: AppBar(
+        automaticallyImplyLeading: false,
+        title: const Text('Provider account'),
+        actions: [
+          IconButton(
+            tooltip: 'Sign out',
+            onPressed: () async {
+              await ref.read(signOutActionProvider)();
+              if (context.mounted) context.go('/login');
+            },
+            icon: const Icon(Icons.logout),
+          ),
+        ],
+      ),
+      body: SafeArea(
+        child: Center(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.all(28),
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 560),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    rejected
+                        ? Icons.cancel_outlined
+                        : Icons.hourglass_top_rounded,
+                    size: 68,
+                    color: rejected
+                        ? Theme.of(context).colorScheme.error
+                        : Theme.of(context).colorScheme.primary,
+                  ),
+                  const SizedBox(height: 18),
+                  Text(
+                    rejected
+                        ? 'Application needs changes'
+                        : 'Application under review',
+                    style: Theme.of(context).textTheme.headlineSmall,
+                    textAlign: TextAlign.center,
+                  ),
+                  const SizedBox(height: 10),
+                  if (submissionAcknowledged) ...[
+                    Card(
+                      color: Theme.of(context).colorScheme.primaryContainer,
+                      child: const Padding(
+                        padding: EdgeInsets.all(14),
+                        child: Text(
+                          'Application submitted successfully. Your information is saved securely.',
+                          textAlign: TextAlign.center,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                  ],
+                  Text(
+                    rejected
+                        ? 'Review the feedback below, edit the application, and resubmit it for another review.'
+                        : 'A FixMate administrator will verify your submitted information and phone number. You can safely leave the app and check again later.',
+                    textAlign: TextAlign.center,
+                  ),
+                  if (rejected && profile.rejectionReason.isNotEmpty) ...[
+                    const SizedBox(height: 16),
+                    Card(
+                      color: Theme.of(context).colorScheme.errorContainer,
+                      child: Padding(
+                        padding: const EdgeInsets.all(16),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Administrator feedback',
+                              style: Theme.of(context).textTheme.titleMedium,
+                            ),
+                            const SizedBox(height: 6),
+                            Text(profile.rejectionReason),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ],
+                  if (!rejected) ...[
+                    const SizedBox(height: 16),
+                    const Card(
+                      child: Padding(
+                        padding: EdgeInsets.all(16),
+                        child: Text(
+                          'Next steps\n\n1. Keep your email and phone details current.\n2. Check this screen later for the review result.\n3. Editing and resubmitting keeps the application pending until a new review is completed.',
+                        ),
+                      ),
+                    ),
+                  ],
+                  const SizedBox(height: 22),
+                  FilledButton.icon(
+                    onPressed: () =>
+                        context.push('/provider/onboarding', extra: profile),
+                    icon: const Icon(Icons.edit),
+                    label: Text(
+                      rejected
+                          ? 'Edit and resubmit application'
+                          : 'Edit application',
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  OutlinedButton.icon(
+                    onPressed: () => context.push('/account'),
+                    icon: const Icon(Icons.manage_accounts_outlined),
+                    label: const Text('Account information'),
+                  ),
+                  const SizedBox(height: 6),
+                  TextButton.icon(
+                    onPressed: () async {
+                      await ref.read(signOutActionProvider)();
+                      if (context.mounted) context.go('/login');
+                    },
+                    icon: const Icon(Icons.logout),
+                    label: const Text('Sign out'),
+                  ),
+                ],
               ),
-              const SizedBox(height: 18),
-              Text(
-                rejected
-                    ? 'Application needs changes'
-                    : 'Application under review',
-                style: Theme.of(context).textTheme.headlineSmall,
-                textAlign: TextAlign.center,
-              ),
-              const SizedBox(height: 10),
-              Text(
-                rejected
-                    ? 'Update your provider details, then contact FixMate support for another review.'
-                    : 'You can edit your profile while an administrator verifies your information and phone number.',
-                textAlign: TextAlign.center,
-              ),
-              const SizedBox(height: 22),
-              FilledButton.icon(
-                onPressed: () =>
-                    context.push('/provider/onboarding', extra: profile),
-                icon: const Icon(Icons.edit),
-                label: const Text('Edit application'),
-              ),
-            ],
+            ),
           ),
         ),
       ),
     );
   }
+}
+
+String providerApplicationError(Object error) {
+  if (error is FirebaseException && error.code == 'permission-denied') {
+    return 'FixMate could not save your application. Confirm your email is verified, your account is active, and this debug device is registered with App Check if enforcement is enabled, then try again.';
+  }
+  return friendlyError(error);
 }
 
 class ProviderDashboardScreen extends ConsumerWidget {
@@ -324,125 +457,267 @@ class ProviderDashboardScreen extends ConsumerWidget {
     final user = ref.watch(currentUserProfileProvider).value;
     if (user == null) return const LoadingView();
     final repository = ref.read(marketplaceRepositoryProvider);
+    final reviews = ref.watch(providerReviewSummaryProvider(user.id));
+    final stats = ref.watch(providerDashboardStatsProvider(user.id));
     return Scaffold(
       appBar: AppBar(
         title: Text('Hello, ${user.displayName.split(' ').first}'),
+        actions: [
+          IconButton(
+            tooltip: 'Refresh dashboard',
+            onPressed: () {
+              ref.invalidate(providerReviewSummaryProvider(user.id));
+              ref.invalidate(providerDashboardStatsProvider(user.id));
+            },
+            icon: const Icon(Icons.refresh),
+          ),
+        ],
       ),
-      body: FutureBuilder<ReviewSummary>(
-        future: repository.getProviderReviewSummary(user.id),
-        builder: (context, reviewSnapshot) => FutureBuilder<ProviderDashboardStats>(
-          future: repository.getProviderDashboardStats(user.id),
-          builder: (context, statsSnapshot) => StreamBuilder<List<Booking>>(
-            stream: repository.watchBookings(
-              uid: user.id,
-              role: UserRole.provider,
-              limit: 20,
-            ),
-            builder: (context, bookingSnapshot) {
-              if (reviewSnapshot.hasError || statsSnapshot.hasError) {
-                return ErrorView(
-                  message: friendlyError(
-                    reviewSnapshot.error ?? statsSnapshot.error!,
+      body: StreamBuilder<List<Booking>>(
+        stream: repository.watchBookings(
+          uid: user.id,
+          role: UserRole.provider,
+          limit: 20,
+        ),
+        builder: (context, bookingSnapshot) {
+          if (bookingSnapshot.hasError) {
+            return ErrorView(
+              message: friendlyError(bookingSnapshot.error!),
+              onRetry: () {
+                ref.invalidate(providerReviewSummaryProvider(user.id));
+                ref.invalidate(providerDashboardStatsProvider(user.id));
+              },
+            );
+          }
+          if (!bookingSnapshot.hasData) return const LoadingView();
+          final bookings = bookingSnapshot.data!;
+          return ListView(
+            padding: const EdgeInsets.all(18),
+            children: [
+              _ProviderReputationCard(
+                reviews: reviews,
+                stats: stats,
+                onRetry: () {
+                  ref.invalidate(providerReviewSummaryProvider(user.id));
+                  ref.invalidate(providerDashboardStatsProvider(user.id));
+                },
+              ),
+              const SizedBox(height: 14),
+              _ProviderAnalyticsGrid(
+                stats: stats,
+                onRetry: () =>
+                    ref.invalidate(providerDashboardStatsProvider(user.id)),
+              ),
+              const SizedBox(height: 14),
+              Card(
+                child: ListTile(
+                  leading: const Icon(Icons.account_balance_wallet_outlined),
+                  title: const Text('Payment collection'),
+                  subtitle: const Text(
+                    'Completed earnings are confirmed cash payments. Online payments are planned but no gateway is connected in this release.',
                   ),
-                );
-              }
-              if (!reviewSnapshot.hasData ||
-                  !statsSnapshot.hasData ||
-                  !bookingSnapshot.hasData) {
-                return const LoadingView();
-              }
-              final reviews = reviewSnapshot.data!;
-              final stats = statsSnapshot.data!;
-              final bookings = bookingSnapshot.data!;
-              return ListView(
-                padding: const EdgeInsets.all(18),
-                children: [
-                  Card(
-                    color: Theme.of(context).colorScheme.primaryContainer,
-                    child: Padding(
-                      padding: const EdgeInsets.all(20),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          const Text('Your reputation'),
-                          const SizedBox(height: 8),
-                          Text(
-                            reviews.hasReviews
-                                ? '${reviews.average!.toStringAsFixed(1)} ★'
-                                : 'No verified rating yet',
-                            style: Theme.of(context).textTheme.headlineMedium,
-                          ),
-                          Text(
-                            '${reviews.count} reviews • ${stats.completed} completed jobs',
-                          ),
-                        ],
-                      ),
-                    ),
+                ),
+              ),
+              const SizedBox(height: 22),
+              Text(
+                'Recent bookings',
+                style: Theme.of(context).textTheme.titleLarge,
+              ),
+              const SizedBox(height: 8),
+              if (bookings.isEmpty)
+                const SizedBox(
+                  height: 220,
+                  child: EmptyView(
+                    icon: Icons.calendar_month_outlined,
+                    title: 'No bookings yet',
+                    message: 'Your booking requests will appear here.',
                   ),
-                  const SizedBox(height: 14),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: _StatCard(
-                          label: 'New requests',
-                          value: stats.pending,
-                          icon: Icons.notifications_active_outlined,
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: _StatCard(
-                          label: 'Active jobs',
-                          value: stats.active,
-                          icon: Icons.handyman_outlined,
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 22),
-                  Text(
-                    'Recent bookings',
-                    style: Theme.of(context).textTheme.titleLarge,
-                  ),
-                  const SizedBox(height: 8),
-                  if (bookings.isEmpty)
-                    const SizedBox(
-                      height: 220,
-                      child: EmptyView(
-                        icon: Icons.calendar_month_outlined,
-                        title: 'No bookings yet',
-                        message: 'Your booking requests will appear here.',
-                      ),
-                    )
-                  else
-                    ...bookings
-                        .take(5)
-                        .map(
-                          (booking) => Card(
-                            child: ListTile(
-                              onTap: () =>
-                                  context.push('/booking/${booking.id}'),
-                              title: Text(booking.serviceTitle),
-                              subtitle: Text(
-                                formatBookingSchedule(
-                                  booking.scheduleDateKey,
-                                  booking.timeWindow,
-                                ),
-                              ),
-                              trailing: BookingStatusChip(
-                                status: booking.status,
-                              ),
+                )
+              else
+                ...bookings
+                    .take(5)
+                    .map(
+                      (booking) => Card(
+                        child: ListTile(
+                          onTap: () => context.push('/booking/${booking.id}'),
+                          title: Text(booking.serviceTitle),
+                          subtitle: Text(
+                            formatBookingSchedule(
+                              booking.scheduleDateKey,
+                              booking.timeWindow,
                             ),
                           ),
+                          trailing: BookingStatusChip(status: booking.status),
                         ),
-                ],
-              );
-            },
-          ),
-        ),
+                      ),
+                    ),
+            ],
+          );
+        },
       ),
     );
   }
+}
+
+class _ProviderReputationCard extends StatelessWidget {
+  const _ProviderReputationCard({
+    required this.reviews,
+    required this.stats,
+    required this.onRetry,
+  });
+
+  final AsyncValue<ReviewSummary> reviews;
+  final AsyncValue<ProviderDashboardStats> stats;
+  final VoidCallback onRetry;
+
+  @override
+  Widget build(BuildContext context) => Card(
+    color: Theme.of(context).colorScheme.primaryContainer,
+    child: Padding(
+      padding: const EdgeInsets.all(20),
+      child: reviews.when(
+        loading: () => const Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Loading verified reputation…'),
+            SizedBox(height: 10),
+            LinearProgressIndicator(),
+          ],
+        ),
+        error: (error, stack) => _DashboardMetricError(
+          title: 'Reputation is temporarily unavailable',
+          error: error,
+          onRetry: onRetry,
+        ),
+        data: (review) => Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('Your verified reputation'),
+            const SizedBox(height: 8),
+            Text(
+              review.hasReviews
+                  ? '${review.average!.toStringAsFixed(1)} ★'
+                  : 'No verified rating yet',
+              style: Theme.of(context).textTheme.headlineMedium,
+            ),
+            Text(
+              '${review.count} verified reviews • '
+              '${stats.value?.completed ?? 0} completed jobs',
+            ),
+          ],
+        ),
+      ),
+    ),
+  );
+}
+
+class _ProviderAnalyticsGrid extends StatelessWidget {
+  const _ProviderAnalyticsGrid({required this.stats, required this.onRetry});
+
+  final AsyncValue<ProviderDashboardStats> stats;
+  final VoidCallback onRetry;
+
+  @override
+  Widget build(BuildContext context) => stats.when(
+    loading: () => const Card(
+      child: Padding(
+        padding: EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Loading exact booking analytics…'),
+            SizedBox(height: 10),
+            LinearProgressIndicator(),
+          ],
+        ),
+      ),
+    ),
+    error: (error, stack) => _DashboardMetricError(
+      title: 'Analytics are temporarily unavailable',
+      error: error,
+      onRetry: onRetry,
+    ),
+    data: (value) => Column(
+      children: [
+        Row(
+          children: [
+            Expanded(
+              child: _StatCard(
+                label: 'New requests',
+                value: value.pending,
+                icon: Icons.notifications_active_outlined,
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: _StatCard(
+                label: 'Active jobs',
+                value: value.active,
+                icon: Icons.handyman_outlined,
+              ),
+            ),
+          ],
+        ),
+        Row(
+          children: [
+            Expanded(
+              child: _StatCard(
+                label: 'Completed jobs',
+                value: value.completed,
+                icon: Icons.task_alt_outlined,
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: _StatCard(
+                label: 'Active services (${value.totalServices} total)',
+                value: value.activeServices,
+                icon: Icons.home_repair_service_outlined,
+              ),
+            ),
+          ],
+        ),
+        Card(
+          child: ListTile(
+            leading: const Icon(Icons.payments_outlined),
+            title: Text(
+              formatBdt(value.cashEarningsBdt),
+              style: Theme.of(context).textTheme.titleLarge,
+            ),
+            subtitle: const Text('Confirmed cash earnings'),
+          ),
+        ),
+      ],
+    ),
+  );
+}
+
+class _DashboardMetricError extends StatelessWidget {
+  const _DashboardMetricError({
+    required this.title,
+    required this.error,
+    this.onRetry,
+  });
+
+  final String title;
+  final Object error;
+  final VoidCallback? onRetry;
+
+  @override
+  Widget build(BuildContext context) => Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      Text(title, style: Theme.of(context).textTheme.titleMedium),
+      const SizedBox(height: 4),
+      Text(friendlyError(error)),
+      if (onRetry != null)
+        TextButton.icon(
+          onPressed: onRetry,
+          icon: const Icon(Icons.refresh),
+          label: const Text('Retry'),
+        ),
+    ],
+  );
 }
 
 class _StatCard extends StatelessWidget {
@@ -636,114 +911,150 @@ class _ServiceEditorScreenState extends ConsumerState<ServiceEditorScreen> {
           return categories.when(
             loading: () => const LoadingView(),
             error: (error, stack) => ErrorView(message: friendlyError(error)),
-            data: (categoryItems) => SingleChildScrollView(
-              padding: const EdgeInsets.all(20),
-              child: Form(
-                key: _formKey,
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    Container(
-                      height: 120,
-                      decoration: BoxDecoration(
-                        color: Theme.of(context).colorScheme.primaryContainer,
-                        borderRadius: BorderRadius.circular(20),
+            data: (categoryItems) {
+              final selectedCategory =
+                  categoryItems.any((item) => item.id == _categoryId)
+                  ? _categoryId
+                  : null;
+              return SingleChildScrollView(
+                padding: const EdgeInsets.all(20),
+                child: Form(
+                  key: _formKey,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Container(
+                        height: 120,
+                        decoration: BoxDecoration(
+                          color: Theme.of(context).colorScheme.primaryContainer,
+                          borderRadius: BorderRadius.circular(20),
+                        ),
+                        child: const Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Icon(Icons.home_repair_service, size: 42),
+                            SizedBox(height: 8),
+                            Text('Category artwork is used on the free plan.'),
+                          ],
+                        ),
                       ),
-                      child: const Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Icon(Icons.home_repair_service, size: 42),
-                          SizedBox(height: 8),
-                          Text('Category artwork is used on the free plan.'),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(height: 16),
-                    DropdownButtonFormField<String>(
-                      initialValue: _categoryId,
-                      decoration: const InputDecoration(labelText: 'Category'),
-                      items: categoryItems
-                          .map(
-                            (item) => DropdownMenuItem(
-                              value: item.id,
-                              child: Row(
-                                children: [
-                                  Icon(categoryIcon(item.iconKey)),
-                                  const SizedBox(width: 8),
-                                  Text(item.name),
-                                ],
-                              ),
+                      const SizedBox(height: 16),
+                      if (categoryItems.isEmpty) ...[
+                        const Card(
+                          child: ListTile(
+                            leading: Icon(Icons.info_outline),
+                            title: Text('No active categories available'),
+                            subtitle: Text(
+                              'Ask a FixMate administrator to add or activate a service category before publishing.',
                             ),
-                          )
-                          .toList(),
-                      onChanged: (value) => setState(() => _categoryId = value),
-                      validator: (value) =>
-                          value == null ? 'Choose a category.' : null,
-                    ),
-                    const SizedBox(height: 12),
-                    TextFormField(
-                      controller: _title,
-                      maxLength: 80,
-                      validator: (value) =>
-                          value == null || value.trim().length < 3
-                          ? 'Use at least 3 characters.'
-                          : null,
-                      decoration: const InputDecoration(
-                        labelText: 'Service title',
+                          ),
+                        ),
+                        const SizedBox(height: 12),
+                      ] else if (_categoryId != null &&
+                          selectedCategory == null) ...[
+                        const Card(
+                          child: ListTile(
+                            leading: Icon(Icons.warning_amber_outlined),
+                            title: Text('Previous category is inactive'),
+                            subtitle: Text(
+                              'Choose an active category before saving this service.',
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 12),
+                      ],
+                      DropdownButtonFormField<String>(
+                        initialValue: selectedCategory,
+                        decoration: const InputDecoration(
+                          labelText: 'Category',
+                        ),
+                        items: categoryItems
+                            .map(
+                              (item) => DropdownMenuItem(
+                                value: item.id,
+                                child: Row(
+                                  children: [
+                                    Icon(categoryIcon(item.iconKey)),
+                                    const SizedBox(width: 8),
+                                    Text(item.name),
+                                  ],
+                                ),
+                              ),
+                            )
+                            .toList(),
+                        onChanged: (value) =>
+                            setState(() => _categoryId = value),
+                        validator: (value) =>
+                            value == null ||
+                                !categoryItems.any((item) => item.id == value)
+                            ? 'Choose an active category.'
+                            : null,
                       ),
-                    ),
-                    const SizedBox(height: 12),
-                    TextFormField(
-                      controller: _description,
-                      maxLength: 1000,
-                      minLines: 4,
-                      maxLines: 8,
-                      validator: (value) =>
-                          value == null || value.trim().length < 20
-                          ? 'Use at least 20 characters.'
-                          : null,
-                      decoration: const InputDecoration(
-                        labelText: 'Description',
+                      const SizedBox(height: 12),
+                      TextFormField(
+                        controller: _title,
+                        maxLength: 80,
+                        validator: (value) =>
+                            value == null || value.trim().length < 3
+                            ? 'Use at least 3 characters.'
+                            : null,
+                        decoration: const InputDecoration(
+                          labelText: 'Service title',
+                        ),
                       ),
-                    ),
-                    const SizedBox(height: 12),
-                    TextFormField(
-                      controller: _price,
-                      keyboardType: TextInputType.number,
-                      validator: (value) {
-                        final price = int.tryParse(value ?? '');
-                        return price == null || price <= 0 || price > 1000000
-                            ? 'Enter a price from ৳1 to ৳1,000,000.'
-                            : null;
-                      },
-                      decoration: const InputDecoration(
-                        labelText: 'Fixed price (BDT)',
-                        prefixText: '৳ ',
+                      const SizedBox(height: 12),
+                      TextFormField(
+                        controller: _description,
+                        maxLength: 1000,
+                        minLines: 4,
+                        maxLines: 8,
+                        validator: (value) =>
+                            value == null || value.trim().length < 20
+                            ? 'Use at least 20 characters.'
+                            : null,
+                        decoration: const InputDecoration(
+                          labelText: 'Description',
+                        ),
                       ),
-                    ),
-                    const SizedBox(height: 12),
-                    SwitchListTile(
-                      contentPadding: EdgeInsets.zero,
-                      value: _status == ServiceStatus.active,
-                      onChanged: (value) => setState(
-                        () => _status = value
-                            ? ServiceStatus.active
-                            : ServiceStatus.archived,
+                      const SizedBox(height: 12),
+                      TextFormField(
+                        controller: _price,
+                        keyboardType: TextInputType.number,
+                        validator: (value) {
+                          final price = int.tryParse(value ?? '');
+                          return price == null || price <= 0 || price > 1000000
+                              ? 'Enter a price from ৳1 to ৳1,000,000.'
+                              : null;
+                        },
+                        decoration: const InputDecoration(
+                          labelText: 'Fixed price (BDT)',
+                          prefixText: '৳ ',
+                        ),
                       ),
-                      title: const Text('Published'),
-                      subtitle: const Text(
-                        'Archived services remain visible only to you.',
+                      const SizedBox(height: 12),
+                      SwitchListTile(
+                        contentPadding: EdgeInsets.zero,
+                        value: _status == ServiceStatus.active,
+                        onChanged: (value) => setState(
+                          () => _status = value
+                              ? ServiceStatus.active
+                              : ServiceStatus.archived,
+                        ),
+                        title: const Text('Published'),
+                        subtitle: const Text(
+                          'Archived services remain visible only to you.',
+                        ),
                       ),
-                    ),
-                    const SizedBox(height: 20),
-                    FilledButton(
-                      onPressed: _loading ? null : () => _save(user, profile),
-                      child: Text(_loading ? 'Saving…' : 'Save service'),
-                    ),
-                  ],
+                      const SizedBox(height: 20),
+                      FilledButton(
+                        onPressed: _loading ? null : () => _save(user, profile),
+                        child: Text(_loading ? 'Saving…' : 'Save service'),
+                      ),
+                    ],
+                  ),
                 ),
-              ),
-            ),
+              );
+            },
           );
         },
       ),

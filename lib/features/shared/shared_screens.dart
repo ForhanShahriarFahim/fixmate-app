@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:intl/intl.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:fixmate/core/constants/app_constants.dart';
 import 'package:fixmate/core/data/firebase_providers.dart';
@@ -12,14 +13,17 @@ import 'package:fixmate/features/bookings/booking_screens.dart';
 import 'package:fixmate/features/catalog/catalog_screens.dart';
 import 'package:fixmate/features/provider/provider_screens.dart';
 
-class CustomerShell extends StatefulWidget {
-  const CustomerShell({super.key});
+class CustomerShell extends ConsumerStatefulWidget {
+  const CustomerShell({this.initialIndex = 0, super.key});
+
+  final int initialIndex;
+
   @override
-  State<CustomerShell> createState() => _CustomerShellState();
+  ConsumerState<CustomerShell> createState() => _CustomerShellState();
 }
 
-class _CustomerShellState extends State<CustomerShell> {
-  var _index = 0;
+class _CustomerShellState extends ConsumerState<CustomerShell> {
+  late int _index;
   static const _screens = <Widget>[
     CustomerHomeScreen(),
     BookingListScreen(),
@@ -28,45 +32,66 @@ class _CustomerShellState extends State<CustomerShell> {
   ];
 
   @override
-  Widget build(BuildContext context) => Scaffold(
-    body: IndexedStack(index: _index, children: _screens),
-    bottomNavigationBar: NavigationBar(
-      selectedIndex: _index,
-      onDestinationSelected: (value) => setState(() => _index = value),
-      destinations: const [
-        NavigationDestination(
-          icon: Icon(Icons.home_outlined),
-          selectedIcon: Icon(Icons.home),
-          label: 'Home',
-        ),
-        NavigationDestination(
-          icon: Icon(Icons.calendar_month_outlined),
-          selectedIcon: Icon(Icons.calendar_month),
-          label: 'Bookings',
-        ),
-        NavigationDestination(
-          icon: Icon(Icons.history_outlined),
-          selectedIcon: Icon(Icons.history),
-          label: 'Activity',
-        ),
-        NavigationDestination(
-          icon: Icon(Icons.person_outline),
-          selectedIcon: Icon(Icons.person),
-          label: 'Profile',
-        ),
-      ],
-    ),
-  );
+  void initState() {
+    super.initState();
+    _index = widget.initialIndex.clamp(0, _screens.length - 1).toInt();
+  }
+
+  @override
+  void didUpdateWidget(CustomerShell oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.initialIndex != widget.initialIndex) {
+      _index = widget.initialIndex.clamp(0, _screens.length - 1).toInt();
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final user = ref.watch(currentUserProfileProvider).value;
+    return Scaffold(
+      body: IndexedStack(index: _index, children: _screens),
+      bottomNavigationBar: NavigationBar(
+        selectedIndex: _index,
+        onDestinationSelected: (value) => setState(() => _index = value),
+        destinations: [
+          const NavigationDestination(
+            icon: Icon(Icons.home_outlined),
+            selectedIcon: Icon(Icons.home),
+            label: 'Home',
+          ),
+          const NavigationDestination(
+            icon: Icon(Icons.calendar_month_outlined),
+            selectedIcon: Icon(Icons.calendar_month),
+            label: 'Bookings',
+          ),
+          NavigationDestination(
+            icon: _ActivityNavigationIcon(user: user, selected: false),
+            selectedIcon: _ActivityNavigationIcon(user: user, selected: true),
+            label: 'Activity',
+          ),
+          const NavigationDestination(
+            icon: Icon(Icons.person_outline),
+            selectedIcon: Icon(Icons.person),
+            label: 'Profile',
+          ),
+        ],
+      ),
+    );
+  }
 }
 
 class ProviderShell extends ConsumerStatefulWidget {
-  const ProviderShell({super.key});
+  const ProviderShell({this.initialIndex = 0, super.key});
+
+  final int initialIndex;
   @override
   ConsumerState<ProviderShell> createState() => _ProviderShellState();
 }
 
 class _ProviderShellState extends ConsumerState<ProviderShell> {
-  var _index = 0;
+  late int _index;
+  ProviderProfile? _recentSubmission;
+  bool _submissionInProgress = false;
   static const _screens = <Widget>[
     ProviderDashboardScreen(),
     BookingListScreen(),
@@ -76,77 +101,176 @@ class _ProviderShellState extends ConsumerState<ProviderShell> {
   ];
 
   @override
+  void initState() {
+    super.initState();
+    _index = widget.initialIndex.clamp(0, _screens.length - 1).toInt();
+  }
+
+  @override
+  void didUpdateWidget(ProviderShell oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.initialIndex != widget.initialIndex) {
+      _index = widget.initialIndex.clamp(0, _screens.length - 1).toInt();
+    }
+  }
+
+  void _handleProviderSubmitted(ProviderProfile profile) {
+    setState(() {
+      _recentSubmission = profile;
+      _submissionInProgress = false;
+    });
+    ref.invalidate(providerProfileProvider(profile.providerId));
+  }
+
+  void _handleSubmittingChanged(bool value) {
+    if (_submissionInProgress == value) return;
+    setState(() => _submissionInProgress = value);
+  }
+
+  @override
   Widget build(BuildContext context) {
     final user = ref.watch(currentUserProfileProvider).value;
     if (user == null) return const Scaffold(body: LoadingView());
     final provider = ref.watch(providerProfileProvider(user.id));
     return provider.when(
       loading: () => const Scaffold(body: LoadingView()),
-      error: (error, stack) =>
-          Scaffold(body: ErrorView(message: friendlyError(error))),
+      error: (error, stack) => Scaffold(
+        body: ErrorView(
+          message: friendlyError(error),
+          onRetry: () => ref.invalidate(providerProfileProvider(user.id)),
+        ),
+      ),
       data: (profile) {
-        if (profile == null) return const ProviderOnboardingScreen();
-        if (!profile.isBookable) {
-          return ProviderApprovalScreen(profile: profile);
+        if (_submissionInProgress) {
+          return ProviderOnboardingScreen(
+            existing: profile,
+            onSubmitted: _handleProviderSubmitted,
+            onSubmittingChanged: _handleSubmittingChanged,
+          );
         }
-        return Scaffold(
-          body: IndexedStack(index: _index, children: _screens),
-          bottomNavigationBar: NavigationBar(
-            selectedIndex: _index,
-            onDestinationSelected: (value) => setState(() => _index = value),
-            destinations: const [
-              NavigationDestination(
-                icon: Icon(Icons.dashboard_outlined),
-                selectedIcon: Icon(Icons.dashboard),
-                label: 'Dashboard',
-              ),
-              NavigationDestination(
-                icon: Icon(Icons.calendar_month_outlined),
-                selectedIcon: Icon(Icons.calendar_month),
-                label: 'Bookings',
-              ),
-              NavigationDestination(
-                icon: Icon(Icons.home_repair_service_outlined),
-                selectedIcon: Icon(Icons.home_repair_service),
-                label: 'Services',
-              ),
-              NavigationDestination(
-                icon: Icon(Icons.history_outlined),
-                selectedIcon: Icon(Icons.history),
-                label: 'Activity',
-              ),
-              NavigationDestination(
-                icon: Icon(Icons.person_outline),
-                selectedIcon: Icon(Icons.person),
-                label: 'Profile',
-              ),
-            ],
+        final effectiveProfile =
+            profile != null &&
+                profile.approvalStatus != ProviderApprovalStatus.pending
+            ? profile
+            : _recentSubmission ?? profile;
+        return switch (resolveProviderEntryState(effectiveProfile)) {
+          ProviderEntryState.onboarding => ProviderOnboardingScreen(
+            onSubmitted: _handleProviderSubmitted,
+            onSubmittingChanged: _handleSubmittingChanged,
           ),
-        );
+          ProviderEntryState.pending ||
+          ProviderEntryState.rejected => ProviderApprovalScreen(
+            profile: effectiveProfile!,
+            submissionAcknowledged:
+                _recentSubmission != null &&
+                effectiveProfile.approvalStatus ==
+                    ProviderApprovalStatus.pending,
+          ),
+          ProviderEntryState.dashboard => Scaffold(
+            body: IndexedStack(index: _index, children: _screens),
+            bottomNavigationBar: NavigationBar(
+              selectedIndex: _index,
+              onDestinationSelected: (value) {
+                if (value == 0 || value == 4) {
+                  ref.invalidate(providerReviewSummaryProvider(user.id));
+                  ref.invalidate(providerDashboardStatsProvider(user.id));
+                }
+                setState(() => _index = value);
+              },
+              destinations: [
+                const NavigationDestination(
+                  icon: Icon(Icons.dashboard_outlined),
+                  selectedIcon: Icon(Icons.dashboard),
+                  label: 'Dashboard',
+                ),
+                const NavigationDestination(
+                  icon: Icon(Icons.calendar_month_outlined),
+                  selectedIcon: Icon(Icons.calendar_month),
+                  label: 'Bookings',
+                ),
+                const NavigationDestination(
+                  icon: Icon(Icons.home_repair_service_outlined),
+                  selectedIcon: Icon(Icons.home_repair_service),
+                  label: 'Services',
+                ),
+                NavigationDestination(
+                  icon: _ActivityNavigationIcon(user: user, selected: false),
+                  selectedIcon: _ActivityNavigationIcon(
+                    user: user,
+                    selected: true,
+                  ),
+                  label: 'Activity',
+                ),
+                const NavigationDestination(
+                  icon: Icon(Icons.person_outline),
+                  selectedIcon: Icon(Icons.person),
+                  label: 'Profile',
+                ),
+              ],
+            ),
+          ),
+        };
       },
     );
   }
 }
 
-class ActivityScreen extends ConsumerWidget {
+enum ProviderEntryState { onboarding, pending, rejected, dashboard }
+
+ProviderEntryState resolveProviderEntryState(ProviderProfile? profile) {
+  if (profile == null) return ProviderEntryState.onboarding;
+  if (profile.isBookable) return ProviderEntryState.dashboard;
+  if (profile.approvalStatus == ProviderApprovalStatus.rejected) {
+    return ProviderEntryState.rejected;
+  }
+  return ProviderEntryState.pending;
+}
+
+class ActivityScreen extends ConsumerStatefulWidget {
   const ActivityScreen({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<ActivityScreen> createState() => _ActivityScreenState();
+}
+
+class _ActivityScreenState extends ConsumerState<ActivityScreen> {
+  bool _markingRead = false;
+
+  Future<void> _markAllRead(AppUserProfile user) async {
+    if (_markingRead) return;
+    setState(() => _markingRead = true);
+    try {
+      await ref
+          .read(marketplaceRepositoryProvider)
+          .markAllActivityRead(user.id);
+      if (mounted) showMessage(context, 'Activity marked as read.');
+    } catch (error) {
+      if (mounted) showMessage(context, friendlyError(error), error: true);
+    } finally {
+      if (mounted) setState(() => _markingRead = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final user = ref.watch(currentUserProfileProvider).value;
     if (user == null) return const Scaffold(body: LoadingView());
     return Scaffold(
-      appBar: AppBar(title: const Text('Recent activity')),
-      body: StreamBuilder<List<FixMateNotification>>(
+      appBar: AppBar(title: const Text('Activity')),
+      body: StreamBuilder<ActivityFeed>(
         stream: ref
             .read(marketplaceRepositoryProvider)
-            .watchActivity(uid: user.id, role: user.role),
+            .watchActivityFeed(uid: user.id, role: user.role),
         builder: (context, snapshot) {
           if (snapshot.hasError) {
-            return ErrorView(message: friendlyError(snapshot.error!));
+            return ErrorView(
+              message: friendlyError(snapshot.error!),
+              onRetry: () => setState(() {}),
+            );
           }
           if (!snapshot.hasData) return const LoadingView();
-          if (snapshot.data!.isEmpty) {
+          final feed = snapshot.data!;
+          if (feed.items.isEmpty) {
             return const EmptyView(
               icon: Icons.history_outlined,
               title: 'No activity',
@@ -156,7 +280,7 @@ class ActivityScreen extends ConsumerWidget {
           }
           return ListView.separated(
             padding: const EdgeInsets.all(16),
-            itemCount: snapshot.data!.length + 1,
+            itemCount: feed.items.length + 2,
             separatorBuilder: (_, _) => const SizedBox(height: 6),
             itemBuilder: (context, index) {
               if (index == 0) {
@@ -170,12 +294,60 @@ class ActivityScreen extends ConsumerWidget {
                   ),
                 );
               }
-              final item = snapshot.data![index - 1];
+              if (index == 1) {
+                if (!feed.readTrackingAvailable) {
+                  return const Card(
+                    child: ListTile(
+                      leading: Icon(Icons.visibility_outlined),
+                      title: Text('Activity history is available'),
+                      subtitle: Text(
+                        'Unread markers are temporarily unavailable. You can still open every booking update below.',
+                      ),
+                    ),
+                  );
+                }
+                return Align(
+                  alignment: Alignment.centerRight,
+                  child: TextButton.icon(
+                    onPressed: feed.unreadCount == 0 || _markingRead
+                        ? null
+                        : () => _markAllRead(user),
+                    icon: _markingRead
+                        ? const SizedBox.square(
+                            dimension: 18,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.done_all),
+                    label: Text(
+                      feed.unreadCount == 0
+                          ? 'All activity read'
+                          : 'Mark all read (${feed.unreadCount})',
+                    ),
+                  ),
+                );
+              }
+              final item = feed.items[index - 2];
+              final unread = feed.isUnread(item);
               return Card(
                 child: ListTile(
-                  leading: Icon(_notificationIcon(item.type)),
+                  leading: Badge(
+                    isLabelVisible: unread,
+                    smallSize: 10,
+                    child: Icon(_notificationIcon(item.type)),
+                  ),
                   title: Text(item.title),
-                  subtitle: Text(item.body),
+                  subtitle: Text(
+                    item.createdAt == null
+                        ? item.body
+                        : '${item.body}\n${_activityTime(item.createdAt!)}',
+                  ),
+                  isThreeLine: item.createdAt != null,
+                  trailing: unread
+                      ? Semantics(
+                          label: 'Unread activity',
+                          child: const Text('New'),
+                        )
+                      : null,
                   onTap: () {
                     if (context.mounted && item.route.startsWith('/')) {
                       context.push(item.route);
@@ -189,6 +361,42 @@ class ActivityScreen extends ConsumerWidget {
       ),
     );
   }
+}
+
+class _ActivityNavigationIcon extends StatelessWidget {
+  const _ActivityNavigationIcon({required this.user, required this.selected});
+
+  final AppUserProfile? user;
+  final bool selected;
+
+  @override
+  Widget build(BuildContext context) {
+    final currentUser = user;
+    final icon = Icon(selected ? Icons.history : Icons.history_outlined);
+    if (currentUser == null) return icon;
+    return StreamBuilder<ActivityFeed>(
+      stream: ProviderScope.containerOf(context)
+          .read(marketplaceRepositoryProvider)
+          .watchActivityFeed(uid: currentUser.id, role: currentUser.role),
+      builder: (context, snapshot) {
+        final count = snapshot.data?.unreadCount ?? 0;
+        return Badge.count(
+          isLabelVisible: count > 0,
+          count: count.clamp(0, 99).toInt(),
+          child: icon,
+        );
+      },
+    );
+  }
+}
+
+String _activityTime(DateTime value) {
+  final local = value.toLocal();
+  final now = DateTime.now();
+  if (now.difference(local).inDays == 0) {
+    return 'Today ${DateFormat.jm().format(local)}';
+  }
+  return DateFormat.yMMMd().add_jm().format(local);
 }
 
 IconData _notificationIcon(NotificationType type) => switch (type) {
@@ -493,6 +701,12 @@ class ProfileScreen extends ConsumerWidget {
                     : 'Provider account',
                 textAlign: TextAlign.center,
               ),
+              if (user.role == UserRole.provider) ...[
+                const SizedBox(height: 16),
+                _ProviderProfileReputation(userId: user.id),
+                const SizedBox(height: 12),
+                _ProviderRecentReviews(userId: user.id),
+              ],
               const SizedBox(height: 22),
               Card(
                 child: Column(
@@ -557,7 +771,7 @@ class ProfileScreen extends ConsumerWidget {
               const SizedBox(height: 12),
               OutlinedButton.icon(
                 onPressed: () async {
-                  await ref.read(authRepositoryProvider).signOut();
+                  await ref.read(signOutActionProvider)();
                   if (context.mounted) context.go('/login');
                 },
                 icon: const Icon(Icons.logout),
@@ -577,6 +791,106 @@ class ProfileScreen extends ConsumerWidget {
       ),
     );
   }
+}
+
+class _ProviderProfileReputation extends ConsumerWidget {
+  const _ProviderProfileReputation({required this.userId});
+
+  final String userId;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final summary = ref.watch(providerReviewSummaryProvider(userId));
+    final stats = ref.watch(providerDashboardStatsProvider(userId));
+    return Card(
+      child: Column(
+        children: [
+          ListTile(
+            leading: const Icon(Icons.star_outline),
+            title: summary.when(
+              loading: () => const Text('Loading verified rating…'),
+              error: (error, stack) => const Text('Rating unavailable'),
+              data: (value) => Text(
+                value.hasReviews
+                    ? '${value.average!.toStringAsFixed(1)} out of 5'
+                    : 'No verified rating yet',
+              ),
+            ),
+            subtitle: Text(
+              '${summary.value?.count ?? 0} verified reviews • '
+              '${stats.value?.completed ?? 0} completed jobs',
+            ),
+            trailing: IconButton(
+              tooltip: 'Refresh rating',
+              onPressed: () {
+                ref.invalidate(providerReviewSummaryProvider(userId));
+                ref.invalidate(providerDashboardStatsProvider(userId));
+              },
+              icon: const Icon(Icons.refresh),
+            ),
+          ),
+          if (summary.hasError || stats.hasError)
+            const Padding(
+              padding: EdgeInsets.fromLTRB(16, 0, 16, 12),
+              child: Text(
+                'FixMate could not refresh these verified statistics. Other profile controls remain available.',
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ProviderRecentReviews extends ConsumerWidget {
+  const _ProviderRecentReviews({required this.userId});
+
+  final String userId;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) => Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      Text(
+        'Recent customer reviews',
+        style: Theme.of(context).textTheme.titleMedium,
+      ),
+      const SizedBox(height: 8),
+      StreamBuilder<List<ServiceReview>>(
+        stream: ref
+            .read(marketplaceRepositoryProvider)
+            .watchProviderReviews(userId, limit: 5),
+        builder: (context, snapshot) {
+          if (snapshot.hasError) {
+            return Card(
+              child: ListTile(
+                leading: const Icon(Icons.error_outline),
+                title: const Text('Reviews temporarily unavailable'),
+                subtitle: Text(friendlyError(snapshot.error!)),
+              ),
+            );
+          }
+          if (!snapshot.hasData) return const LinearProgressIndicator();
+          if (snapshot.data!.isEmpty) {
+            return const Card(
+              child: ListTile(
+                leading: Icon(Icons.rate_review_outlined),
+                title: Text('No customer reviews yet'),
+                subtitle: Text(
+                  'A review appears here after a customer completes and reviews a booking.',
+                ),
+              ),
+            );
+          }
+          return Column(
+            children: snapshot.data!
+                .map((review) => VerifiedReviewCard(review: review))
+                .toList(growable: false),
+          );
+        },
+      ),
+    ],
+  );
 }
 
 class LegalDocumentScreen extends StatelessWidget {

@@ -8,6 +8,13 @@ abstract final class FirebaseConfiguration {
       '1:186366110068:android:81a7c2859eae0bb7156421';
   static const expectedWebAppId = '1:186366110068:web:cd6be69830847ab9156421';
 
+  /// App Check must be registered in Firebase Console before the client SDK
+  /// is activated. Keep it opt-in while enforcement is disabled so an
+  /// incomplete setup cannot delay Authentication or Firestore.
+  static const appCheckEnabled = bool.fromEnvironment(
+    'FIXMATE_ENABLE_APP_CHECK',
+  );
+
   static bool get isConfigured {
     try {
       return hasExpectedIdentity(

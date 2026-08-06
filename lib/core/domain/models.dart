@@ -36,6 +36,29 @@ enum DeletionRequestStatus {
   completed,
 }
 
+class AdminMembership {
+  const AdminMembership({
+    required this.uid,
+    required this.active,
+    required this.displayName,
+  });
+
+  factory AdminMembership.fromDocument(
+    DocumentSnapshot<Map<String, dynamic>> document,
+  ) {
+    final data = document.data() ?? <String, dynamic>{};
+    return AdminMembership(
+      uid: document.id,
+      active: data['active'] as bool? ?? false,
+      displayName: data['displayName'] as String? ?? 'FixMate administrator',
+    );
+  }
+
+  final String uid;
+  final bool active;
+  final String displayName;
+}
+
 T enumFromName<T extends Enum>(List<T> values, Object? raw, T fallback) {
   final wire = raw?.toString();
   for (final value in values) {
@@ -110,6 +133,10 @@ class ProviderProfile {
     required this.serviceAreaKeys,
     required this.approvalStatus,
     required this.marketplaceVisible,
+    this.rejectionReason = '',
+    this.reviewedBy,
+    this.reviewedAt,
+    this.updatedAt,
   });
 
   factory ProviderProfile.fromDocument(
@@ -136,6 +163,10 @@ class ProviderProfile {
         ProviderApprovalStatus.pending,
       ),
       marketplaceVisible: data['marketplaceVisible'] as bool? ?? false,
+      rejectionReason: data['rejectionReason'] as String? ?? '',
+      reviewedBy: data['reviewedBy'] as String?,
+      reviewedAt: dateFrom(data['reviewedAt']),
+      updatedAt: dateFrom(data['updatedAt']),
     );
   }
 
@@ -150,6 +181,10 @@ class ProviderProfile {
   final List<String> serviceAreaKeys;
   final ProviderApprovalStatus approvalStatus;
   final bool marketplaceVisible;
+  final String rejectionReason;
+  final String? reviewedBy;
+  final DateTime? reviewedAt;
+  final DateTime? updatedAt;
 
   bool get isBookable =>
       approvalStatus == ProviderApprovalStatus.approved && marketplaceVisible;
@@ -161,6 +196,7 @@ class ServiceCategory {
     required this.name,
     required this.iconKey,
     required this.order,
+    required this.isActive,
   });
 
   factory ServiceCategory.fromDocument(
@@ -172,6 +208,7 @@ class ServiceCategory {
       name: data['name'] as String? ?? '',
       iconKey: data['iconKey'] as String? ?? 'handyman',
       order: (data['order'] as num?)?.toInt() ?? 0,
+      isActive: data['isActive'] as bool? ?? false,
     );
   }
 
@@ -179,6 +216,7 @@ class ServiceCategory {
   final String name;
   final String iconKey;
   final int order;
+  final bool isActive;
 }
 
 class ServiceListing {
@@ -510,11 +548,38 @@ class ProviderDashboardStats {
     required this.pending,
     required this.active,
     required this.completed,
+    required this.totalServices,
+    required this.activeServices,
+    required this.cashEarningsBdt,
   });
 
   final int pending;
   final int active;
   final int completed;
+  final int totalServices;
+  final int activeServices;
+  final int cashEarningsBdt;
+}
+
+class ActivityFeed {
+  const ActivityFeed({
+    required this.items,
+    required this.lastReadAt,
+    this.readTrackingAvailable = true,
+  });
+
+  final List<FixMateNotification> items;
+  final DateTime? lastReadAt;
+  final bool readTrackingAvailable;
+
+  bool isUnread(FixMateNotification item) {
+    if (!readTrackingAvailable) return false;
+    final createdAt = item.createdAt;
+    if (createdAt == null) return false;
+    return lastReadAt == null || createdAt.isAfter(lastReadAt!);
+  }
+
+  int get unreadCount => items.where(isUnread).length;
 }
 
 class BlockedUser {

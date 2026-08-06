@@ -15,25 +15,35 @@ void main() {
       DefaultFirebaseOptions.android.appId,
       FirebaseConfiguration.expectedAndroidAppId,
     );
-  });
-
-  test('uses the verified FixMate web Firebase project', () {
     expect(
       FirebaseConfiguration.hasExpectedIdentity(
-        DefaultFirebaseOptions.web,
-        isWebPlatform: true,
+        DefaultFirebaseOptions.android,
+        isWebPlatform: false,
       ),
       isTrue,
     );
-    expect(
-      DefaultFirebaseOptions.web.projectId,
-      FirebaseConfiguration.expectedProjectId,
-    );
-    expect(
-      DefaultFirebaseOptions.web.appId,
-      FirebaseConfiguration.expectedWebAppId,
-    );
   });
+
+  test(
+    'uses the verified FixMate web Firebase project for FlutLab preview',
+    () {
+      expect(
+        DefaultFirebaseOptions.web.projectId,
+        FirebaseConfiguration.expectedProjectId,
+      );
+      expect(
+        DefaultFirebaseOptions.web.appId,
+        FirebaseConfiguration.expectedWebAppId,
+      );
+      expect(
+        FirebaseConfiguration.hasExpectedIdentity(
+          DefaultFirebaseOptions.web,
+          isWebPlatform: true,
+        ),
+        isTrue,
+      );
+    },
+  );
 
   testWidgets('explains Firebase setup when configuration is missing', (
     tester,
