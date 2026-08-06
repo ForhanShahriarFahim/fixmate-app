@@ -1,81 +1,145 @@
-# FixMate Spark Administration Runbook
+# FixMate Spark administration runbook
 
-This runbook is for the first Android internal-testing release. Administration
-is manual in Firebase Console because Cloud Functions and Admin credentials are
-deliberately excluded. Console actions are **configured operations**, not coded
-or automatically verified behavior.
+FixMate now contains a minimal Android administrator review interface. It uses
+Firestore `admins/{uid}` membership; it does **not** trust a role stored in
+`users/{uid}`, an email address, or local device state.
 
-## Provider approval and suspension
+The administrator interface is implemented in the current application. The
+revised Security Rules were explicitly deployed to Firebase project
+`fixmate-ce36d` on 6 August 2026, and the first trusted administrator membership
+was created for the project's only verified Authentication account. The live
+membership contains `active: true` and `displayName: "FixMate Administrator"`.
+Firebase Console rejected the nonessential `createdAt` timestamp field, so do
+not claim that audit field exists on the first membership.
 
-1. Verify the provider's `users/{uid}` record is active, email-verified in
-   Firebase Authentication, and has role `provider`.
-2. Review `provider_profiles/{uid}` and its coverage.
-3. Approve by setting `approvalStatus` to `approved` and
-   `marketplaceVisible` to `true` in one Console edit.
-4. To reject, set `marketplaceVisible` to `false` first, then set
-   `approvalStatus` to `rejected`.
-5. To suspend, set `provider_profiles/{uid}.marketplaceVisible` to `false`
-   before setting `users/{uid}.status` to `suspended`.
+## Bootstrap the first administrator
 
-The official Flutter catalog filters against the live provider profile. Rules
-also reject new bookings and provider actions unless the account is active and
-the profile is both approved and visible. Existing booking history remains
-readable. Customers may cancel pending or accepted bookings; in-progress,
-completion-requested, and disputed work requires support handling.
+There is intentionally no Register as admin option.
 
-Any provider-authored public profile edit resets the profile to `pending` and
-`marketplaceVisible: false`. Re-review it before restoring visibility.
+1. In Firebase Authentication for project `fixmate-ce36d`, create or identify
+   the email/password account owned by the administrator.
+2. Ensure that account controls its email and completes Firebase email
+   verification. An account created in Firebase Console can sign into FixMate,
+   use the verification screen to resend the verification email, and then
+   verify it.
+3. Copy the exact Firebase Authentication UID. Do not copy an email address
+   into a UID field.
+4. In Firestore Console, create document `admins/{uid}` with:
+   - `active` (Boolean): `true`
+   - `displayName` (String): the administrator's non-sensitive display label
+   - `createdAt` (Timestamp): recommended current console time; this audit field
+     is not used to authorize the administrator
+5. After the revised Rules have been explicitly reviewed and deployed, sign in
+   through FixMate's normal login screen. Admin membership is resolved before
+   an ordinary `users/{uid}` profile, so an administrator does not need a
+   customer/provider profile.
+6. Confirm that the app opens **Provider reviews**, can read only authorized
+   pending applications, and can sign out.
+
+Creating or changing `admins/{uid}` from the FixMate client is always denied.
+An admin cannot review a provider profile with the same UID, preventing
+self-review. To revoke access, an authorized Firebase operator sets `active`
+to `false` or removes the membership document through Firebase Console.
+
+## Provider review
+
+The dashboard lists pending `provider_profiles` and shows the matching private
+`users/{uid}` record only to an authorized administrator. Before approval,
+verify:
+
+- the user role is `provider` and account status is `active`;
+- email verification in Firebase Authentication;
+- registered name and Bangladesh phone number;
+- biography, experience, division, district, and service-area coverage.
+
+Approve writes `approvalStatus: approved`, `marketplaceVisible: true`,
+`reviewedAt` using a server timestamp, `reviewedBy` using the signed-in admin
+UID, an empty `rejectionReason`, and `updatedAt` using a server timestamp.
+
+Reject requires provider-facing feedback of 3–500 characters and writes
+`approvalStatus: rejected`, `marketplaceVisible: false`, and the same protected
+review audit fields. Providers can see the rejection reason and explicitly edit
+and resubmit. Any provider-authored profile edit clears prior review fields and
+returns the profile to pending/hidden; providers cannot approve themselves,
+make themselves visible, or write admin membership.
+
+## Service categories
+
+An active administrator can open **Provider reviews → Manage service
+categories**.
+
+- Add a category with an immutable lowercase slug, public name, supported icon,
+  display order, and active state.
+- Edit the name, icon, order, or active state from the category actions menu.
+- Deactivation requires confirmation. It removes the category from provider
+  create/edit selection; providers editing an affected listing must choose an
+  active category. Existing listings are not silently deleted or rewritten.
+- Delete is permanent and is available only after deactivation. The app checks
+  Firestore on the server and refuses deletion while any active or archived
+  service references the category ID. Reassign every referenced service first.
+  Firestore Rules independently require an active administrator and inactive
+  category; providers cannot create a new reference after deactivation.
+- Category IDs must remain stable because services store the ID. Do not reuse an
+  old ID for an unrelated type of work.
+
+Provider category choices come from active `categories` documents, so an active
+administrator-created category appears without an application release. Rules,
+not the admin UI, enforce authority and field validation.
+
+Category deletion was coded, emulator-tested, and deployed through an explicitly
+authorized Rules-only release on 6 August 2026. The live Rules source was read
+back and verified against repository SHA-256
+`912BF14253AA3EE4CB94179BCC235F0A6D56E83AD5332DC90E659C2B91E4AF83`.
+
+## Suspension
+
+To suspend a provider through Firebase Console, first set
+`provider_profiles/{uid}.marketplaceVisible` to `false`, then set
+`users/{uid}.status` to `suspended`. Existing history remains readable, while
+new marketplace mutations are denied. In-progress, completion-requested, and
+disputed work requires support handling.
 
 ## Reports and disputes
 
-- Review new documents in `reports` where `status == open`.
+- Review `reports` where `status == open`.
 - Do not reveal reporter details to the reported user.
 - Record only necessary moderation notes and change status to `reviewing`,
-  `resolved`, or `dismissed` through the Console.
-- For a disputed booking, preserve its current data before any correction.
-  If an administrator resolves status manually, also add a corresponding
-  immutable booking event with actor `admin` and document the decision outside
-  the app. There is no automatic administrator workflow in this release.
+  `resolved`, or `dismissed` through Firebase Console.
+- Preserve disputed booking data before any operator correction. The current
+  admin interface does not edit bookings, reports, disputes, or user status.
 
 ## Account-deletion requests
 
-The application creates `deletion_requests/{uid}` and changes
-`users/{uid}.status` to `deletionPending` atomically. It does not delete data or
-the Authentication identity.
+The app creates `deletion_requests/{uid}` and atomically changes
+`users/{uid}.status` to `deletionPending`. Spark has no trusted automatic
+cleanup in this repository. An authorized operator must complete the following
+restartable process before deleting the Authentication identity:
 
 1. Verify the requester and confirm there are no pending, accepted,
    in-progress, completion-requested, or disputed bookings for either role.
 2. Set the request status to `cleanupInProgress` and update `updatedAt`.
 3. For providers, set `marketplaceVisible` to `false` and archive their
    services before removing the public provider profile.
-4. Remove the user's authored messages and reviews. Review aggregates are
-   computed directly from remaining immutable reviews, so no stored rating
-   field requires repair.
-5. Anonymize the user's name and contact fields in retained booking snapshots
-   and remove private address/phone values. Preserve only operational status,
-   price, schedule, and moderation data that the publisher's reviewed policy
-   permits retaining.
-6. Remove the private user profile and outgoing block records. Review incoming
-   blocks and reports for the minimum necessary anonymization.
-7. Delete the Firebase Authentication identity **after** required cleanup is
-   complete.
-8. Set the deletion request to `completed`, clear `failureMessage`, and update
-   `updatedAt`. Retain only the minimum pseudonymous marker allowed by the
+4. Remove authored messages and reviews. Review aggregates are calculated from
+   the remaining reviews, so recheck affected provider statistics afterward.
+5. Anonymize the user's name/contact snapshots in retained bookings and remove
+   private address/phone values. Retain only operational data permitted by the
    reviewed privacy policy.
+6. Remove the private user profile and outgoing block records. Minimize or
+   anonymize incoming blocks, reports, and moderation records as the reviewed
+   retention policy requires.
+7. Delete the Firebase Authentication identity only after required cleanup is
+   verified.
+8. Set the deletion request to `completed`, clear `failureMessage`, and update
+   `updatedAt`. Retain only the minimum pseudonymous audit marker permitted by
+   the reviewed policy.
 
-If any step fails, leave the Authentication identity intact when possible, set
-the request to `cleanupFailed`, record a non-sensitive failure summary, and
-resume from the last verified step. Never mark a request completed merely
-because marketplace access is disabled.
+If any step fails, leave the Authentication identity intact when practical,
+set the request to `cleanupFailed`, record a non-sensitive failure summary, and
+resume from the last verified step. Never mark a request complete merely
+because marketplace access was disabled. For an email request, verify control
+of the registered email, then create the same deletion request and
+`deletionPending` state through Firebase Console before following these steps.
 
-For an email request, verify control of the registered email, then create the
-same deletion request and `deletionPending` account state through the Console
-before following the steps above.
-
-## Release cautions
-
-- Never put a service-account key, Admin SDK credential, App Check debug token,
-  password, or signing credential in this repository or FlutLab.
-- Firebase Console changes must be performed by an authorized publisher and
-  recorded for the internal test.
-- This runbook requires publisher and legal review before Play submission.
+Never store a service-account key, Admin SDK credential, App Check debug token,
+password, signing credential, or administrator UID in source control.

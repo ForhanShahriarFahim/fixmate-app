@@ -1,6 +1,6 @@
 # FixMate FlutLab readiness
 
-Last verified: 5 August 2026 (Asia/Dhaka)
+Last verified: 6 August 2026 (Asia/Dhaka)
 
 ## Current build status
 
@@ -12,8 +12,9 @@ FlutLab preview. The identities are fixed and verified:
 - Dart package: `fixmate`
 - Android application ID and namespace: `com.fixmatebd.app`
 - Firebase project: `fixmate-ce36d` with separate Android and web clients
-- Flutter: `3.41.6`
-- Dart: `3.11.4`
+- Repository CI/local Flutter: `3.44.8`
+- Repository CI/local Dart: `3.12.2`
+- Last verified FlutLab builder: Flutter `3.41.7`
 - Android minimum SDK: Flutter 3.41 default (`24`)
 - Android compile SDK: Flutter 3.41 default (`36`)
 - Android Gradle Plugin: `8.11.1`
@@ -43,8 +44,10 @@ debug run and startup verification remain manual.
    Flutter project even when only Android is being built. The scaffold is
    retained for import compatibility; iOS is not configured or in release
    scope.
-2. Select FlutLab's Flutter 3.41 builder, currently `3.41.7`. Do not allow an
-   unrelated major/minor Flutter or dependency upgrade during the first build.
+2. Select the newest FlutLab builder compatible with the committed lockfile.
+   Flutter `3.41.7` was the last browser-verified FlutLab builder; repository CI
+   is pinned to Flutter `3.44.8`. Do not silently regenerate dependencies when
+   changing builders.
 3. Run **Pub Get** and keep the committed `pubspec.lock`.
 4. For FlutLab Web, open **Settings → Builder**, select `web-emulator`, run
    **Build Project**, and open **Web Emulator**.
@@ -97,14 +100,15 @@ Remaining manual work:
 | Check | Result |
 |---|---|
 | `flutter pub get` | Pass |
-| Dart formatting verification | Pass; 29 files checked, 0 changes |
+| Dart formatting verification | Pass; 36 files checked, 0 changes |
 | `flutter analyze` | Pass; no issues |
-| `flutter test` | Pass; 16 tests |
+| `flutter test` | Pass; 46/46 tests |
 | `npm run lint` | Pass |
-| `npm test` | Pass; 5 local tooling tests, emulator tests skipped as designed |
-| `npm run test:rules` | Pass; 24/24 emulator cases |
-| `flutter build apk --debug` | Pass; Firebase-connected 174,897,108-byte APK |
+| `npm test` | Pass; 5 local tooling tests, 30 emulator cases skipped as designed |
+| `npm run test:rules` | Pass; 30/30 emulator cases |
+| `flutter build apk --debug` | Pass; Firebase-connected 176,852,672-byte APK, package `com.fixmatebd.app`, version `1.0.0+1` |
 | `flutter build web --debug` | Pass; Firebase-connected `build/web` output |
+| GitHub workflow YAML/Bash validation | Pass; four workflows and six Bash blocks |
 | FlutLab Flutter 3.41.7 `pub get` | Pass |
 | FlutLab Flutter tests | Pass; 15 tests |
 | FlutLab `android-all` build | Expected signing stop; FlutLab invoked `assembleRelease`, and release signing remains fail-closed |
@@ -122,7 +126,12 @@ Remaining manual work:
   the refreshed FlutLab Web runtime still requires an interactive browser
   verification after the updated branch is merged and synchronized.
 - Firestore Rules, all 11 indexes, and the six reviewed category documents are
-  deployed; their customer/provider behavior still requires device verification.
+  deployed. The category-deletion Rules are also deployed and live-source
+  verified; category deletion and customer/provider behavior still require
+  device verification.
+- Successful pull-request CI retains a downloadable debug APK for 14 days. The
+  signed tag workflow is coded but cannot publish until the protected
+  `android-release` Environment and its private signing secrets are configured.
 - GitHub Pages legal files are coded but not published or legally reviewed.
 - Release builds fail closed when private upload signing is absent or
   incomplete; they never fall back to the debug key. Supply a private upload
