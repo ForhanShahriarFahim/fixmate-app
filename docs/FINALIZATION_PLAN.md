@@ -132,8 +132,8 @@ are actually observed; automated success must not be described as a device pass.
 | Android-only conversion | Coded | Web/iOS/FlutLab and Play/AAB paths removed in current branch diff |
 | Current local validation | Passed | Formatting, analysis, 45 Flutter tests, 5 tooling unit tests, 30 Rules tests, and debug APK on 6 August 2026 |
 | Current PR CI | Pending updated commit | Must pass before merge |
-| Private release signing | Pending | Must be generated and backed up outside repository |
-| GitHub Environment secrets | Pending | `android-release` only; values must not be printed |
+| Private release signing | Configured | Keystore and Windows-DPAPI recovery record stored outside the repository; certificate SHA-256 `6D325AB05CC3CEB117EEC1E6CB6B0B587E66F3F70E394E86DB34BD0C19CE2391` |
+| GitHub Environment secrets | Configured | `android-release` contains exactly the four required secret names; values were not printed |
 | Merge to `main` | Pending | Requires green PR CI |
 | Tag and GitHub Release | Pending | `v1.0.0+1` after green `main` |
 | Published APK verification | Pending | Checksum, package, version, certificate, download |
@@ -143,6 +143,13 @@ The verified debug APK is
 `build/app/outputs/flutter-apk/app-debug.apk` (package `com.fixmatebd.app`,
 version `1.0.0+1`). No Android device was connected during this validation, so
 `flutter run` and physical-device acceptance remain pending.
+
+The private key produced a locally verified release APK. A clean warm-cache
+`flutter build apk --release` completed, and `aapt2`/`apksigner` confirmed
+package `com.fixmatebd.app`, version `1.0.0+1`, and the certificate fingerprint
+shown above. The temporary `android/key.properties` was removed and remained
+untracked. The local APK file hash is build-specific and will be replaced by
+the checksum of the downloaded GitHub Release asset after publication.
 
 The Firebase test/seed toolchain was updated to current reviewed versions. A
 non-forced `npm audit fix` removed every high-severity finding. Nine moderate
